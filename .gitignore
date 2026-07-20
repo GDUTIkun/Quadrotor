@@ -1,0 +1,13 @@
+build/
+install/
+log/
+
+.colcon/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+*.swp
+*.swo
+*~
+.DS_Store
