@@ -1,0 +1,70 @@
+# ROS 2 / colcon workspace outputs
+build/
+install/
+log/
+.colcon/
+
+# Python cache and packaging artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+
+# C/C++ build artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.elf
+*.bin
+*.hex
+*.map
+
+# Runtime logs, captures, and generated data
+*.log
+*.bag
+*.db3
+*.mcap
+rosbag2_*/
+captures/
+recordings/
+
+# Serial/GCS local configuration
+.env
+.env.*
+!.env.example
+config/local.*
+config/*secret*
+config/*private*
+*.key
+*.pem
+*.crt
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
