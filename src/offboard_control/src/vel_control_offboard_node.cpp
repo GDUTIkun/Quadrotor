@@ -26,8 +26,8 @@ public:
     {
         // Debug parameters: keep these together for quick field tuning.
         declare_parameter<double>("flight_z", 0.5);
-        declare_parameter<double>("cruise_speed", 0.4);
-        declare_parameter<double>("accel_limit", 0.2);
+        declare_parameter<double>("cruise_speed", 0.6);
+        declare_parameter<double>("accel_limit", 0.3);
         declare_parameter<double>("brake_accel", 0.2);
         declare_parameter<double>("arrival_tolerance", 0.08);
         declare_parameter<double>("position_p_gain", 1.4);
@@ -597,7 +597,7 @@ auto_arm=true
 enable_terminal_input=true
 是否开启终端输入。设为 false 后节点只会起飞悬停，不接收 x 终点 / y 终点 命令。
 
-x 1.0
+x -2.0
 y 1.0
 x -1.0
 y 0.0
