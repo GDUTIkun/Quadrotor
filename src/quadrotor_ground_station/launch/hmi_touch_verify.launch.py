@@ -10,7 +10,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument("serial_port", default_value="/dev/ttyS2"),
+            DeclareLaunchArgument("serial_port", default_value="/dev/ttyS7"),
             DeclareLaunchArgument("baud_rate", default_value="115200"),
             Node(
                 package="quadrotor_ground_station",

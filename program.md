@@ -4,17 +4,19 @@
 
 将当前工程逐步改造成 ROS2 Humble / Ubuntu 22.04 工程，主语言使用 C++ `rclcpp`。
 
-原流程中的“地面站 MCU”职责改由香橙派 3B 上的 ROS2 节点承担。串口屏通过 UART2 与香橙派通信，主机先用于写代码和仿真，最终部署到香橙派 3B。
+原流程中的“地面站 MCU”职责改由香橙派 3B 上的 ROS2 节点承担。串口屏通过 UART7 与香橙派通信，主机先用于写代码和仿真，最终部署到香橙派 3B。
 
 硬件默认规划：
 
 - 设备：香橙派 3B
-- 串口：UART2
-- 默认设备名：`/dev/ttyS2`
+- 串口：UART7
+- 默认设备名：`/dev/ttyS7`
 - 默认波特率：`115200`
 - 串口格式：`8N1`
-- 接线：串口屏 TX/RX 与香橙派 UART2 RX/TX 交叉连接，GND 共地
-- 用户给定引脚：RX、TX 对应 `GPIO0`、`D1`
+- 接线：串口屏 TX/RX 与香橙派 UART7 RX/TX 交叉连接，GND 共地
+- UART7 RX：40pin 物理 15 脚，`GPIO4_A2` / GPIO130，接串口屏 TX
+- UART7 TX：40pin 物理 16 脚，`GPIO4_A3` / GPIO131，接串口屏 RX
+- GND：40pin 任意 GND 脚，例如物理 14/20/25/30/34/39
 
 开发原则：
 
@@ -86,7 +88,7 @@
 
 ### 4.1 目标
 
-只验证串口屏触摸控件能否通过 UART2 返回正确字节。
+只验证串口屏触摸控件能否通过 UART7 返回正确字节。
 
 目标返回帧：
 
@@ -120,7 +122,7 @@ hmi_touch_verify_node
 
 节点功能：
 
-1. 打开串口 `/dev/ttyS2`。
+1. 打开串口 `/dev/ttyS7`。
 2. 持续读取串口字节。
 3. 查找 USART_HMI 触摸返回包：
 
@@ -143,7 +145,7 @@ source install/setup.bash
 
 ### 4.4 运行
 
-默认使用 `/dev/ttyS2` 和 `115200`：
+默认使用 `/dev/ttyS7` 和 `115200`：
 
 ```bash
 ros2 launch quadrotor_ground_station hmi_touch_verify.launch.py
@@ -152,7 +154,7 @@ ros2 launch quadrotor_ground_station hmi_touch_verify.launch.py
 如果串口设备名不同：
 
 ```bash
-ros2 launch quadrotor_ground_station hmi_touch_verify.launch.py serial_port:=/dev/ttyS2 baud_rate:=115200
+ros2 launch quadrotor_ground_station hmi_touch_verify.launch.py serial_port:=/dev/ttyS7 baud_rate:=115200
 ```
 
 ### 4.5 通过标准
@@ -170,8 +172,10 @@ matched expected frame: 65 00 01 00 FF FF FF
 - TX/RX 是否交叉连接
 - GND 是否共地
 - 波特率是否一致
-- UART2 是否启用
-- 当前用户是否有 `/dev/ttyS2` 访问权限
+- UART7 是否启用：`/boot/orangepiEnv.txt` 中需要有 `overlays=uart7-m2`
+- 重启后是否存在 `/dev/ttyS7`
+- `stty -F /dev/ttyS7 -a` 是否能正常输出串口参数。如果提示 `Input/output error`，通常表示 UART7 overlay 未生效或尚未重启。
+- 当前用户是否有 `/dev/ttyS7` 访问权限
 
 ---
 

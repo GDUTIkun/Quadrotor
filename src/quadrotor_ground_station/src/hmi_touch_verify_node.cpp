@@ -67,7 +67,7 @@ public:
   HmiTouchVerifyNode()
   : Node("hmi_touch_verify_node")
   {
-    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyS2");
+    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyS7");
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
 
     open_serial();
@@ -96,7 +96,11 @@ private:
 
     termios options {};
     if (tcgetattr(serial_fd_, &options) != 0) {
-      RCLCPP_ERROR(get_logger(), "failed to read serial attributes: %s", std::strerror(errno));
+      RCLCPP_ERROR(
+        get_logger(),
+        "failed to read serial attributes for %s: %s. If this is a 40pin UART, enable its "
+        "device-tree overlay and reboot first.",
+        serial_port_.c_str(), std::strerror(errno));
       close(serial_fd_);
       serial_fd_ = -1;
       return;
