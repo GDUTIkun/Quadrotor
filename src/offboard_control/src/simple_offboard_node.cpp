@@ -27,7 +27,7 @@ public:
         declare_parameter<bool>("auto_arm", true);
         declare_parameter<double>("takeoff_x", 0.0);
         declare_parameter<double>("takeoff_y", 0.0);
-        declare_parameter<double>("takeoff_z", 1.1);
+        declare_parameter<double>("takeoff_z", 0.5);
         declare_parameter<double>("arrival_tolerance", 0.12);
         declare_parameter<double>("setpoint_lowpass_tau", 1.6);
         declare_parameter<double>("setpoint_snap_tolerance", 0.03);
@@ -409,3 +409,12 @@ int main(int argc, char** argv)
     rclcpp::shutdown();
     return 0;
 }
+
+
+
+/*
+坐标：(x, y, z)，向前+y,向右是+x,向上是+z
+启动节点后，默认会起飞到(0, 0, 0.5)的位置悬停，等待终端输入目标点。
+终端输入格式：
+直接输入坐标：x y z
+*/
