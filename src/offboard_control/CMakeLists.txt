@@ -18,31 +18,41 @@ find_package(geometry_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
-add_executable(offboard_node src/offboard_node.cpp)
 add_executable(offboard_node_v2 src/offboard_node_v2.cpp)
 add_executable(simple_offboard_node src/simple_offboard_node.cpp)
-add_executable(continuous_orbit_node continuous_orbit_node.cpp)
+add_executable(vel_control_offboard_node src/vel_control_offboard_node.cpp)
 add_executable(rpi5_servo_pwm_example src/rpi5_servo_pwm_example.cpp)
 target_compile_features(rpi5_servo_pwm_example PUBLIC cxx_std_17)
 
 set(OFFBOARD_CONTROL_TARGETS
-  offboard_node
   offboard_node_v2
   simple_offboard_node
-  continuous_orbit_node
+  vel_control_offboard_node
   rpi5_servo_pwm_example
 )
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/offboard_node.cpp")
+  add_executable(offboard_node src/offboard_node.cpp)
+  list(APPEND OFFBOARD_CONTROL_TARGETS offboard_node)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/continuous_orbit_node.cpp")
+  add_executable(continuous_orbit_node continuous_orbit_node.cpp)
+  list(APPEND OFFBOARD_CONTROL_TARGETS continuous_orbit_node)
+endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/pd_hover_node.cpp")
   add_executable(pd_hover_node src/pd_hover_node.cpp)
   list(APPEND OFFBOARD_CONTROL_TARGETS pd_hover_node)
 endif()
 
-ament_target_dependencies(offboard_node
-  rclcpp
-  geometry_msgs
-  mavros_msgs
-)
+if(TARGET offboard_node)
+  ament_target_dependencies(offboard_node
+    rclcpp
+    geometry_msgs
+    mavros_msgs
+  )
+endif()
 
 ament_target_dependencies(offboard_node_v2
   rclcpp
@@ -65,11 +75,19 @@ ament_target_dependencies(simple_offboard_node
   mavros_msgs
 )
 
-ament_target_dependencies(continuous_orbit_node
+ament_target_dependencies(vel_control_offboard_node
   rclcpp
   geometry_msgs
   mavros_msgs
 )
+
+if(TARGET continuous_orbit_node)
+  ament_target_dependencies(continuous_orbit_node
+    rclcpp
+    geometry_msgs
+    mavros_msgs
+  )
+endif()
 
 install(TARGETS
   ${OFFBOARD_CONTROL_TARGETS}
@@ -89,20 +107,30 @@ foreach(script ${OFFBOARD_CONTROL_SCRIPTS})
     )
   endif()
 endforeach()
-# 安装Python模块（关键修正）
-install(DIRECTORY 
-  include/
-  DESTINATION lib/python3.12/site-packages/offboard_control
-  PATTERN "*.py"
-  PATTERN "__pycache__" EXCLUDE
-)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  # 安装Python模块（关键修正）
+  install(DIRECTORY
+    include/
+    DESTINATION lib/python3.12/site-packages/offboard_control
+    PATTERN "*.py"
+    PATTERN "__pycache__" EXCLUDE
+  )
+endif()
 
-# 安装资源文件
-install(DIRECTORY
-  models/
-  cfg/
-  DESTINATION share/${PROJECT_NAME}
-)
+set(OFFBOARD_CONTROL_RESOURCE_DIRS)
+foreach(resource_dir models cfg)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${resource_dir}")
+    list(APPEND OFFBOARD_CONTROL_RESOURCE_DIRS ${resource_dir}/)
+  endif()
+endforeach()
+
+if(OFFBOARD_CONTROL_RESOURCE_DIRS)
+  # 安装资源文件
+  install(DIRECTORY
+    ${OFFBOARD_CONTROL_RESOURCE_DIRS}
+    DESTINATION share/${PROJECT_NAME}
+  )
+endif()
 
 if(BUILD_TESTING)
 
