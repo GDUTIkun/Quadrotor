@@ -163,7 +163,7 @@ private:
         }
 
         if (phase_ == Phase::HOLD) {
-            publish_velocity(0.0, 0.0);
+            publish_position(last_commanded_position());
             start_pending_command_if_available();
         }
     }
@@ -447,6 +447,12 @@ private:
         std::lock_guard<std::mutex> lock(command_mutex_);
         last_commanded_position_ = takeoff_hover;
         last_commanded_position_initialized_ = true;
+    }
+
+    Target last_commanded_position() const
+    {
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        return last_commanded_position_;
     }
 
     bool is_at_position(const Target& target) const
