@@ -177,6 +177,25 @@ matched expected frame: 65 00 01 00 FF FF FF
 - `stty -F /dev/ttyS7 -a` 是否能正常输出串口参数。如果提示 `Input/output error`，通常表示 UART7 overlay 未生效或尚未重启。
 - 当前用户是否有 `/dev/ttyS7` 访问权限
 
+### 4.6 Orange Pi UART7 本机闭环测试
+
+如果串口屏没有触摸返回，先断开串口屏，把 UART7 TX 和 RX 短接：
+
+```text
+物理 16 脚 UART7 TX  <->  物理 15 脚 UART7 RX
+```
+
+然后运行：
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ROS_LOCALHOST_ONLY=1 ros2 launch quadrotor_ground_station serial_loopback_test.launch.py
+```
+
+如果看到连续 `PASS`，说明 Orange Pi 的 UART7 发送和接收正常，问题应继续查串口屏配置、接线方向、GND 或波特率。
+如果看到 `FAIL`，说明 Orange Pi 这一侧的 UART7 自发自收也没有打通，应优先检查 overlay、针脚短接位置和 `/dev/ttyS7` 状态。
+
 ---
 
 ## 5. 后续阶段开发顺序

@@ -40,3 +40,13 @@ source /opt/ros/humble/setup.bash
 source ~/flight_ws/install/setup.bash
 ROS_LOCALHOST_ONLY=1 ros2 launch quadrotor_ground_station hmi_touch_verify.launch.py
 ```
+
+短接 UART7 TX/RX 后，可以先跑本机串口闭环测试：
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/flight_ws/install/setup.bash
+ROS_LOCALHOST_ONLY=1 ros2 launch quadrotor_ground_station serial_loopback_test.launch.py
+```
+
+看到连续 `PASS` 表示 Orange Pi 的 UART7 自发自收正常。
