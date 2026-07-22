@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <iostream>
 #include <mutex>
@@ -29,8 +30,12 @@ public:
         declare_parameter<double>("takeoff_y", 0.0);
         declare_parameter<double>("takeoff_z", 0.5);
         declare_parameter<double>("arrival_tolerance", 0.12);
-        declare_parameter<double>("setpoint_lowpass_tau", 1.6);
-        declare_parameter<double>("setpoint_snap_tolerance", 0.03);
+        declare_parameter<double>("setpoint_lowpass_min_tau", 0.0);
+        declare_parameter<double>("setpoint_lowpass_near_error", 0.5);
+        declare_parameter<double>("setpoint_lowpass_near_tau", 0.6);
+        declare_parameter<double>("setpoint_lowpass_far_error", 2.0);
+        declare_parameter<double>("setpoint_lowpass_far_tau", 1.2);
+        declare_parameter<double>("setpoint_snap_tolerance", 0.02);
         declare_parameter<bool>("enable_terminal_input", true);
 
         state_sub_ = create_subscription<mavros_msgs::msg::State>(
@@ -101,7 +106,8 @@ private:
         };
 
         Target manual_target{};
-        const bool has_manual_target = get_manual_target(manual_target);
+        uint64_t manual_target_version = 0;
+        const bool has_manual_target = get_manual_target(manual_target, manual_target_version);
 
         if (phase_ == Phase::INIT) {
             publish_position(takeoff_hover);
@@ -118,7 +124,9 @@ private:
 
         if (phase_ == Phase::MANUAL_TARGET) {
             if (has_manual_target) {
-                publish_position(manual_target);
+                const bool manual_target_updated = manual_target_version != active_manual_target_version_;
+                publish_position(manual_target, manual_target_updated);
+                active_manual_target_version_ = manual_target_version;
 
                 if (pose_received_ && is_at_target(manual_target)) {
                     if (!manual_target_reached_) {
@@ -224,9 +232,9 @@ private:
                           1.0 - 2.0 * (q.y * q.y + q.z * q.z));
     }
 
-    void publish_position(const Target& target)
+    void publish_position(const Target& target, bool force_tau_update = false)
     {
-        update_lowpass_setpoint(target);
+        update_lowpass_setpoint(target, force_tau_update);
 
         mavros_msgs::msg::PositionTarget msg;
         msg.header.stamp = now();
@@ -253,7 +261,7 @@ private:
         setpoint_pub_->publish(msg);
     }
 
-    void update_lowpass_setpoint(const Target& target)
+    void update_lowpass_setpoint(const Target& target, bool force_tau_update)
     {
         const auto current_time = now();
         if (!shaped_setpoint_initialized_) {
@@ -261,12 +269,25 @@ private:
             shaped_y_ = target.y;
             shaped_z_ = target.z;
             shaped_setpoint_initialized_ = true;
+            lowpass_target_ = target;
+            lowpass_target_initialized_ = true;
             last_shaping_time_ = current_time;
             return;
         }
 
         const double dt = std::clamp((current_time - last_shaping_time_).seconds(), 0.001, 0.1);
         last_shaping_time_ = current_time;
+
+        if (force_tau_update || !lowpass_target_initialized_ || !targets_match(target, lowpass_target_)) {
+            const double initial_distance = initial_distance_to_target(target);
+            active_lowpass_tau_ = calculate_lowpass_tau(initial_distance);
+            lowpass_target_ = target;
+            lowpass_target_initialized_ = true;
+
+            RCLCPP_INFO(get_logger(),
+                        "Setpoint low-pass tau %.2f selected from initial target distance %.2f m.",
+                        active_lowpass_tau_, initial_distance);
+        }
 
         const double dx = target.x - shaped_x_;
         const double dy = target.y - shaped_y_;
@@ -281,7 +302,7 @@ private:
             return;
         }
 
-        const double tau = get_parameter("setpoint_lowpass_tau").as_double();
+        const double tau = active_lowpass_tau_;
         if (tau <= 0.0) {
             shaped_x_ = target.x;
             shaped_y_ = target.y;
@@ -293,6 +314,51 @@ private:
         shaped_x_ += alpha * dx;
         shaped_y_ += alpha * dy;
         shaped_z_ += alpha * dz;
+    }
+
+    double initial_distance_to_target(const Target& target) const
+    {
+        if (pose_received_) {
+            const auto& p = current_pose_.pose.position;
+            const double dx = p.x - target.x;
+            const double dy = p.y - target.y;
+            const double dz = p.z - target.z;
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        const double dx = target.x - shaped_x_;
+        const double dy = target.y - shaped_y_;
+        const double dz = target.z - shaped_z_;
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    static bool targets_match(const Target& lhs, const Target& rhs)
+    {
+        return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+    }
+
+    double calculate_lowpass_tau(double distance) const
+    {
+        const double near_error = std::max(0.0, get_parameter("setpoint_lowpass_near_error").as_double());
+        const double far_error = std::max(near_error, get_parameter("setpoint_lowpass_far_error").as_double());
+        const double min_tau = get_parameter("setpoint_lowpass_min_tau").as_double();
+        const double near_tau = get_parameter("setpoint_lowpass_near_tau").as_double();
+        const double far_tau = get_parameter("setpoint_lowpass_far_tau").as_double();
+
+        if (distance <= near_error) {
+            if (near_error <= 0.0) {
+                return near_tau;
+            }
+            const double ratio = std::clamp(distance / near_error, 0.0, 1.0);
+            return min_tau + ratio * (near_tau - min_tau);
+        }
+
+        if (far_error <= near_error) {
+            return distance >= far_error ? far_tau : near_tau;
+        }
+
+        const double ratio = std::clamp((distance - near_error) / (far_error - near_error), 0.0, 1.0);
+        return near_tau + ratio * (far_tau - near_tau);
     }
 
     void start_terminal_input()
@@ -356,6 +422,7 @@ private:
             std::lock_guard<std::mutex> lock(manual_target_mutex_);
             manual_target_ = Target{x, y, z};
             manual_target_set_ = true;
+            ++manual_target_version_;
             manual_target_reached_ = false;
         }
 
@@ -364,7 +431,7 @@ private:
                     x, y, z);
     }
 
-    bool get_manual_target(Target& target) const
+    bool get_manual_target(Target& target, uint64_t& version) const
     {
         std::lock_guard<std::mutex> lock(manual_target_mutex_);
         if (!manual_target_set_) {
@@ -372,6 +439,7 @@ private:
         }
 
         target = manual_target_;
+        version = manual_target_version_;
         return true;
     }
 
@@ -381,13 +449,18 @@ private:
     bool initial_yaw_captured_{false};
     bool takeoff_hover_reached_{false};
     bool shaped_setpoint_initialized_{false};
+    bool lowpass_target_initialized_{false};
     double shaped_x_{0.0};
     double shaped_y_{0.0};
     double shaped_z_{0.0};
+    Target lowpass_target_{0.0, 0.0, 0.0};
+    double active_lowpass_tau_{0.0};
 
     mutable std::mutex manual_target_mutex_;
     Target manual_target_{0.0, 0.0, 0.6};
     bool manual_target_set_{false};
+    uint64_t manual_target_version_{0};
+    uint64_t active_manual_target_version_{0};
     std::atomic_bool manual_target_reached_{false};
     std::atomic_bool terminal_thread_running_{false};
 
