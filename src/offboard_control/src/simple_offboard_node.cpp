@@ -119,6 +119,17 @@ private:
         if (phase_ == Phase::MANUAL_TARGET) {
             if (has_manual_target) {
                 publish_position(manual_target);
+
+                if (pose_received_ && is_at_target(manual_target)) {
+                    if (!manual_target_reached_) {
+                        manual_target_reached_ = true;
+                        RCLCPP_INFO(get_logger(),
+                                    "Reached terminal target %.2f %.2f %.2f. Holding position.",
+                                    manual_target.x, manual_target.y, manual_target.z);
+                    }
+                } else if (manual_target_reached_) {
+                    manual_target_reached_ = false;
+                }
             }
             return;
         }
@@ -345,6 +356,7 @@ private:
             std::lock_guard<std::mutex> lock(manual_target_mutex_);
             manual_target_ = Target{x, y, z};
             manual_target_set_ = true;
+            manual_target_reached_ = false;
         }
 
         RCLCPP_INFO(get_logger(),
@@ -376,6 +388,7 @@ private:
     mutable std::mutex manual_target_mutex_;
     Target manual_target_{0.0, 0.0, 0.6};
     bool manual_target_set_{false};
+    std::atomic_bool manual_target_reached_{false};
     std::atomic_bool terminal_thread_running_{false};
 
     mavros_msgs::msg::State current_state_;
