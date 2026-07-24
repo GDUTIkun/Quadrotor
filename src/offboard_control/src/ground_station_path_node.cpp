@@ -86,7 +86,7 @@ public:
   GroundStationPathNode()
   : Node("ground_station_path_node")
   {
-    input_topic_ = declare_parameter<std::string>("input_topic", "ground_station_path_grid");
+    input_topic_ = declare_parameter<std::string>("input_topic", "patrol_path_grid");
     output_topic_ = declare_parameter<std::string>("output_topic", "ground_station_flight_path");
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
     origin_x_ = declare_parameter<double>("origin_x", 0.0);
@@ -108,7 +108,9 @@ public:
       throw std::invalid_argument("参数 qos_depth 必须大于 0");
     }
 
-    auto qos = rclcpp::QoS(rclcpp::KeepLast(static_cast<std::size_t>(qos_depth_))).reliable();
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(static_cast<std::size_t>(qos_depth_)))
+      .reliable()
+      .transient_local();
     path_publisher_ = create_publisher<nav_msgs::msg::Path>(output_topic_, qos);
     path_subscription_ = create_subscription<std_msgs::msg::String>(
       input_topic_, qos, [this](const std_msgs::msg::String::SharedPtr msg) {
@@ -127,8 +129,8 @@ private:
   {
     geometry_msgs::msg::PoseStamped pose;
     pose.header = header;
-    pose.pose.position.x = origin_x_ + static_cast<double>(point.a - 1) * cell_size_;
-    pose.pose.position.y = origin_y_ + static_cast<double>(point.b - 1) * cell_size_;
+    pose.pose.position.x = origin_x_ + static_cast<double>(point.b - 1) * cell_size_;
+    pose.pose.position.y = origin_y_ + static_cast<double>(kGridWidth - point.a) * cell_size_;
     pose.pose.position.z = flight_z_;
     pose.pose.orientation.w = 1.0;
     return pose;

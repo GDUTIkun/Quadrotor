@@ -24,9 +24,11 @@ add_executable(offboard_node_v2 src/offboard_node_v2.cpp)
 add_executable(simple_offboard_node src/simple_offboard_node.cpp)
 add_executable(vel_control_offboard_node src/vel_control_offboard_node.cpp)
 add_executable(ground_station_path_node src/ground_station_path_node.cpp)
+add_executable(waypoint_offboard_node src/waypoint_offboard_node.cpp)
 add_executable(rpi5_servo_pwm_example src/rpi5_servo_pwm_example.cpp)
 add_executable(yolo_snapshot_request_node src/yolo_snapshot_request_node.cpp)
 target_compile_features(ground_station_path_node PUBLIC cxx_std_17)
+target_compile_features(waypoint_offboard_node PUBLIC cxx_std_17)
 target_compile_features(rpi5_servo_pwm_example PUBLIC cxx_std_17)
 target_compile_features(yolo_snapshot_request_node PUBLIC cxx_std_17)
 
@@ -35,6 +37,7 @@ set(OFFBOARD_CONTROL_TARGETS
   simple_offboard_node
   vel_control_offboard_node
   ground_station_path_node
+  waypoint_offboard_node
   rpi5_servo_pwm_example
   yolo_snapshot_request_node
 )
@@ -94,6 +97,13 @@ ament_target_dependencies(ground_station_path_node
   geometry_msgs
   nav_msgs
   std_msgs
+)
+
+ament_target_dependencies(waypoint_offboard_node
+  rclcpp
+  geometry_msgs
+  mavros_msgs
+  nav_msgs
 )
 
 ament_target_dependencies(yolo_snapshot_request_node
