@@ -7,6 +7,7 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -26,6 +27,12 @@ public:
         declare_parameter<bool>("auto_arm", true);
         declare_parameter<std::string>("path_topic", "ground_station_flight_path");
         declare_parameter<double>("arrival_tolerance", 0.12);
+        declare_parameter<double>("setpoint_lowpass_min_tau", 0.0);
+        declare_parameter<double>("setpoint_lowpass_near_error", 0.5);
+        declare_parameter<double>("setpoint_lowpass_near_tau", 0.6);
+        declare_parameter<double>("setpoint_lowpass_far_error", 2.0);
+        declare_parameter<double>("setpoint_lowpass_far_tau", 1.2);
+        declare_parameter<double>("setpoint_snap_tolerance", 0.02);
         declare_parameter<bool>("enable_terminal_input", true);
 
         state_sub_ = create_subscription<mavros_msgs::msg::State>(
@@ -259,6 +266,8 @@ private:
 
     void publish_position(const Target& target)
     {
+        update_lowpass_setpoint(target);
+
         mavros_msgs::msg::PositionTarget msg;
         msg.header.stamp = now();
         msg.header.frame_id = "map";
@@ -273,9 +282,9 @@ private:
             mavros_msgs::msg::PositionTarget::IGNORE_AFZ |
             mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
 
-        msg.position.x = target.x;
-        msg.position.y = target.y;
-        msg.position.z = target.z;
+        msg.position.x = shaped_x_;
+        msg.position.y = shaped_y_;
+        msg.position.z = shaped_z_;
         if (initial_yaw_captured_) {
             msg.yaw = initial_yaw_;
         } else {
@@ -283,6 +292,98 @@ private:
         }
 
         setpoint_pub_->publish(msg);
+    }
+
+    void update_lowpass_setpoint(const Target& target)
+    {
+        const auto current_time = now();
+        if (!shaped_setpoint_initialized_) {
+            shaped_x_ = target.x;
+            shaped_y_ = target.y;
+            shaped_z_ = target.z;
+            shaped_setpoint_initialized_ = true;
+            lowpass_target_ = target;
+            lowpass_target_initialized_ = true;
+            last_shaping_time_ = current_time;
+            return;
+        }
+
+        const double dt = std::clamp((current_time - last_shaping_time_).seconds(), 0.001, 0.1);
+        last_shaping_time_ = current_time;
+
+        if (!lowpass_target_initialized_ || !targets_match(target, lowpass_target_)) {
+            const double target_step_distance = distance_between_lowpass_targets(target);
+            active_lowpass_tau_ = calculate_lowpass_tau(target_step_distance);
+            lowpass_target_ = target;
+            lowpass_target_initialized_ = true;
+
+            RCLCPP_INFO(get_logger(),
+                        "Setpoint low-pass tau %.2f selected from target step distance %.2f m.",
+                        active_lowpass_tau_, target_step_distance);
+        }
+
+        const double dx = target.x - shaped_x_;
+        const double dy = target.y - shaped_y_;
+        shaped_z_ = target.z;
+        const double distance = std::sqrt(dx * dx + dy * dy);
+        const double snap_tolerance = std::max(0.0, get_parameter("setpoint_snap_tolerance").as_double());
+
+        if (distance <= snap_tolerance) {
+            shaped_x_ = target.x;
+            shaped_y_ = target.y;
+            return;
+        }
+
+        const double tau = active_lowpass_tau_;
+        if (tau <= 0.0) {
+            shaped_x_ = target.x;
+            shaped_y_ = target.y;
+            return;
+        }
+
+        const double alpha = dt / (tau + dt);
+        shaped_x_ += alpha * dx;
+        shaped_y_ += alpha * dy;
+    }
+
+    double distance_between_lowpass_targets(const Target& target) const
+    {
+        if (!lowpass_target_initialized_) {
+            return 0.0;
+        }
+
+        const double dx = target.x - lowpass_target_.x;
+        const double dy = target.y - lowpass_target_.y;
+        return std::sqrt(dx * dx + dy * dy);
+    }
+
+    static bool targets_match(const Target& lhs, const Target& rhs)
+    {
+        return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+    }
+
+    double calculate_lowpass_tau(double distance) const
+    {
+        const double near_error = std::max(0.0, get_parameter("setpoint_lowpass_near_error").as_double());
+        const double far_error = std::max(near_error, get_parameter("setpoint_lowpass_far_error").as_double());
+        const double min_tau = get_parameter("setpoint_lowpass_min_tau").as_double();
+        const double near_tau = get_parameter("setpoint_lowpass_near_tau").as_double();
+        const double far_tau = get_parameter("setpoint_lowpass_far_tau").as_double();
+
+        if (distance <= near_error) {
+            if (near_error <= 0.0) {
+                return near_tau;
+            }
+            const double ratio = std::clamp(distance / near_error, 0.0, 1.0);
+            return min_tau + ratio * (near_tau - min_tau);
+        }
+
+        if (far_error <= near_error) {
+            return distance >= far_error ? far_tau : near_tau;
+        }
+
+        const double ratio = std::clamp((distance - near_error) / (far_error - near_error), 0.0, 1.0);
+        return near_tau + ratio * (far_tau - near_tau);
     }
 
     void start_terminal_input()
@@ -345,7 +446,14 @@ private:
     bool pose_received_{false};
     bool initial_yaw_captured_{false};
     bool waypoint_reached_{false};
+    bool shaped_setpoint_initialized_{false};
+    bool lowpass_target_initialized_{false};
     double initial_yaw_{0.0};
+    double shaped_x_{0.0};
+    double shaped_y_{0.0};
+    double shaped_z_{0.0};
+    Target lowpass_target_{0.0, 0.0, 0.0};
+    double active_lowpass_tau_{0.0};
     std::size_t active_index_{0};
     std::atomic_bool advance_requested_{false};
     std::atomic_bool terminal_thread_running_{false};
@@ -356,6 +464,7 @@ private:
     mavros_msgs::msg::State current_state_;
     geometry_msgs::msg::PoseStamped current_pose_;
     rclcpp::Time last_request_time_;
+    rclcpp::Time last_shaping_time_;
 
     rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;

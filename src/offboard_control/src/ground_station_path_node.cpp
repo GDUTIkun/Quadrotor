@@ -91,7 +91,7 @@ public:
     frame_id_ = declare_parameter<std::string>("frame_id", "map");
     origin_x_ = declare_parameter<double>("origin_x", 0.0);
     origin_y_ = declare_parameter<double>("origin_y", 0.0);
-    flight_z_ = declare_parameter<double>("flight_z", 0.9);
+    flight_z_ = declare_parameter<double>("flight_z", 0.8);
     cell_size_ = declare_parameter<double>("cell_size", 0.4);
     qos_depth_ = declare_parameter<int>("qos_depth", 10);
 

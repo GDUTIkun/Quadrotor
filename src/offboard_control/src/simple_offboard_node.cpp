@@ -279,26 +279,25 @@ private:
         last_shaping_time_ = current_time;
 
         if (force_tau_update || !lowpass_target_initialized_ || !targets_match(target, lowpass_target_)) {
-            const double initial_distance = initial_distance_to_target(target);
-            active_lowpass_tau_ = calculate_lowpass_tau(initial_distance);
+            const double target_step_distance = distance_between_lowpass_targets(target);
+            active_lowpass_tau_ = calculate_lowpass_tau(target_step_distance);
             lowpass_target_ = target;
             lowpass_target_initialized_ = true;
 
             RCLCPP_INFO(get_logger(),
-                        "Setpoint low-pass tau %.2f selected from initial target distance %.2f m.",
-                        active_lowpass_tau_, initial_distance);
+                        "Setpoint low-pass tau %.2f selected from target step distance %.2f m.",
+                        active_lowpass_tau_, target_step_distance);
         }
 
         const double dx = target.x - shaped_x_;
         const double dy = target.y - shaped_y_;
-        const double dz = target.z - shaped_z_;
-        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        shaped_z_ = target.z;
+        const double distance = std::sqrt(dx * dx + dy * dy);
         const double snap_tolerance = std::max(0.0, get_parameter("setpoint_snap_tolerance").as_double());
 
         if (distance <= snap_tolerance) {
             shaped_x_ = target.x;
             shaped_y_ = target.y;
-            shaped_z_ = target.z;
             return;
         }
 
@@ -306,30 +305,23 @@ private:
         if (tau <= 0.0) {
             shaped_x_ = target.x;
             shaped_y_ = target.y;
-            shaped_z_ = target.z;
             return;
         }
 
         const double alpha = dt / (tau + dt);
         shaped_x_ += alpha * dx;
         shaped_y_ += alpha * dy;
-        shaped_z_ += alpha * dz;
     }
 
-    double initial_distance_to_target(const Target& target) const
+    double distance_between_lowpass_targets(const Target& target) const
     {
-        if (pose_received_) {
-            const auto& p = current_pose_.pose.position;
-            const double dx = p.x - target.x;
-            const double dy = p.y - target.y;
-            const double dz = p.z - target.z;
-            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (!lowpass_target_initialized_) {
+            return 0.0;
         }
 
-        const double dx = target.x - shaped_x_;
-        const double dy = target.y - shaped_y_;
-        const double dz = target.z - shaped_z_;
-        return std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double dx = target.x - lowpass_target_.x;
+        const double dy = target.y - lowpass_target_.y;
+        return std::sqrt(dx * dx + dy * dy);
     }
 
     static bool targets_match(const Target& lhs, const Target& rhs)
