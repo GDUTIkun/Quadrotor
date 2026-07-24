@@ -17,18 +17,22 @@ find_package(rclpy REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 add_executable(offboard_node_v2 src/offboard_node_v2.cpp)
 add_executable(simple_offboard_node src/simple_offboard_node.cpp)
 add_executable(vel_control_offboard_node src/vel_control_offboard_node.cpp)
 add_executable(rpi5_servo_pwm_example src/rpi5_servo_pwm_example.cpp)
+add_executable(yolo_snapshot_request_node src/yolo_snapshot_request_node.cpp)
 target_compile_features(rpi5_servo_pwm_example PUBLIC cxx_std_17)
+target_compile_features(yolo_snapshot_request_node PUBLIC cxx_std_17)
 
 set(OFFBOARD_CONTROL_TARGETS
   offboard_node_v2
   simple_offboard_node
   vel_control_offboard_node
   rpi5_servo_pwm_example
+  yolo_snapshot_request_node
 )
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/offboard_node.cpp")
@@ -79,6 +83,11 @@ ament_target_dependencies(vel_control_offboard_node
   rclcpp
   geometry_msgs
   mavros_msgs
+)
+
+ament_target_dependencies(yolo_snapshot_request_node
+  rclcpp
+  std_srvs
 )
 
 if(TARGET continuous_orbit_node)
