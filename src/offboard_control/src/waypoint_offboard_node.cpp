@@ -5,6 +5,7 @@
 #include "mavros_msgs/srv/set_mode.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 #include <atomic>
 #include <algorithm>
@@ -26,6 +27,7 @@ public:
         declare_parameter<bool>("auto_set_mode", true);
         declare_parameter<bool>("auto_arm", true);
         declare_parameter<std::string>("path_topic", "ground_station_flight_path");
+        declare_parameter<std::string>("yolo_service_name", "/yolo/capture_and_detect");
         declare_parameter<double>("arrival_tolerance", 0.12);
         declare_parameter<double>("setpoint_lowpass_min_tau", 0.0);
         declare_parameter<double>("setpoint_lowpass_near_error", 0.5);
@@ -68,6 +70,8 @@ public:
 
         set_mode_client_ = create_client<mavros_msgs::srv::SetMode>("mavros/set_mode");
         arming_client_ = create_client<mavros_msgs::srv::CommandBool>("mavros/cmd/arming");
+        yolo_client_ = create_client<std_srvs::srv::Trigger>(
+            get_parameter("yolo_service_name").as_string());
 
         last_request_time_ = now();
         start_terminal_input();
@@ -76,6 +80,9 @@ public:
         RCLCPP_INFO(get_logger(),
                     "Waiting for waypoint path on [%s]. Vehicle will not take off before a path is received.",
                     get_parameter("path_topic").as_string().c_str());
+        RCLCPP_INFO(get_logger(),
+                    "YOLO snapshot service will be requested once after each non-takeoff waypoint: [%s].",
+                    get_parameter("yolo_service_name").as_string().c_str());
     }
 
     ~WaypointOffboardNode() override
@@ -176,6 +183,7 @@ private:
         if (phase == Phase::FLYING_WAYPOINT && is_at_target(target)) {
             waypoint_reached_ = true;
             phase_.store(Phase::HOLDING_WAYPOINT);
+            request_yolo_snapshot_if_needed(active_index_);
 
             if (active_index_ + 1U >= waypoint_count()) {
                 phase_.store(Phase::MISSION_COMPLETE);
@@ -201,6 +209,47 @@ private:
                         "Flying to waypoint %zu/%zu: %.3f %.3f %.3f.",
                         active_index_ + 1U, waypoint_count(), next.x, next.y, next.z);
         }
+    }
+
+    void request_yolo_snapshot_if_needed(std::size_t waypoint_index)
+    {
+        if (waypoint_index == 0U) {
+            RCLCPP_INFO(get_logger(), "Takeoff waypoint reached. Skipping YOLO snapshot request.");
+            return;
+        }
+
+        if (!yolo_client_->service_is_ready()) {
+            RCLCPP_WARN(
+                get_logger(),
+                "YOLO service %s is not ready. Snapshot request for waypoint %zu skipped.",
+                get_parameter("yolo_service_name").as_string().c_str(), waypoint_index + 1U);
+            return;
+        }
+
+        auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+        const std::size_t waypoint_number = waypoint_index + 1U;
+        auto response_callback =
+            [this, waypoint_number](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+                const auto response = future.get();
+                if (response->success) {
+                    RCLCPP_INFO(
+                        get_logger(),
+                        "YOLO snapshot request accepted after waypoint %zu: %s",
+                        waypoint_number, response->message.c_str());
+                    return;
+                }
+
+                RCLCPP_WARN(
+                    get_logger(),
+                    "YOLO snapshot request rejected after waypoint %zu: %s",
+                    waypoint_number, response->message.c_str());
+            };
+
+        yolo_client_->async_send_request(request, response_callback);
+        RCLCPP_INFO(
+            get_logger(),
+            "YOLO snapshot request sent after reaching waypoint %zu.",
+            waypoint_number);
     }
 
     void ensure_offboard_and_armed()
@@ -472,6 +521,7 @@ private:
     rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr setpoint_pub_;
     rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
     rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arming_client_;
+    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr yolo_client_;
     rclcpp::TimerBase::SharedPtr timer_;
     std::thread terminal_thread_;
 };

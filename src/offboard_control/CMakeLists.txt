@@ -104,6 +104,7 @@ ament_target_dependencies(waypoint_offboard_node
   geometry_msgs
   mavros_msgs
   nav_msgs
+  std_srvs
 )
 
 ament_target_dependencies(yolo_snapshot_request_node
