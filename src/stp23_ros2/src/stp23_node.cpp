@@ -22,6 +22,7 @@ using namespace std::chrono_literals;
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
+constexpr const char *kDefaultPortName = "/dev/ttyAMA4";
 
 std::vector<std::string> SerialCandidatesFromDir(const fs::path &dir) {
   std::vector<std::string> candidates;
@@ -66,7 +67,7 @@ class Stp23DriverNode : public rclcpp::Node {
  public:
   Stp23DriverNode() : Node("stp23_node") {
     product_name_ = declare_parameter<std::string>("product_name", "LDLiDAR_STP23");
-    port_name_ = declare_parameter<std::string>("port_name", "auto");
+    port_name_ = declare_parameter<std::string>("port_name", kDefaultPortName);
     baudrate_ = declare_parameter<int>("baudrate", 921600);
     hardware_flow_control_ = declare_parameter<bool>("hardware_flow_control", false);
     frame_id_ = declare_parameter<std::string>("frame_id", "lidar_frame");
@@ -108,14 +109,20 @@ class Stp23DriverNode : public rclcpp::Node {
       throw std::runtime_error("failed to open serial device: " + resolved_port);
     }
 
-    point_pub_ =
-        create_publisher<stp23_ros2::msg::STP>(point_topic_, rclcpp::SensorDataQoS());
-    distance_pub_ =
-        create_publisher<std_msgs::msg::Float32>(distance_topic_, rclcpp::SensorDataQoS());
-    range_pub_ =
-        create_publisher<sensor_msgs::msg::Range>(range_topic_, rclcpp::SensorDataQoS());
-    scan_pub_ =
-        create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
+    if (publish_point_) {
+      point_pub_ =
+          create_publisher<stp23_ros2::msg::STP>(point_topic_, rclcpp::SensorDataQoS());
+      distance_pub_ =
+          create_publisher<std_msgs::msg::Float32>(distance_topic_, rclcpp::SensorDataQoS());
+    }
+    if (publish_range_) {
+      range_pub_ =
+          create_publisher<sensor_msgs::msg::Range>(range_topic_, rclcpp::SensorDataQoS());
+    }
+    if (publish_scan_) {
+      scan_pub_ =
+          create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
+    }
     timer_ = create_wall_timer(5ms, std::bind(&Stp23DriverNode::PublishTimer, this));
 
     RCLCPP_INFO(get_logger(),
@@ -130,8 +137,15 @@ class Stp23DriverNode : public rclcpp::Node {
     }
 
     std::vector<std::string> candidates;
+    if (fs::exists(kDefaultPortName)) {
+      candidates.push_back(kDefaultPortName);
+    }
+
     const auto by_id = SerialCandidatesFromDir("/dev/serial/by-id");
     candidates.insert(candidates.end(), by_id.begin(), by_id.end());
+
+    const auto tty_ama = SerialCandidatesWithPrefix("/dev", "ttyAMA");
+    candidates.insert(candidates.end(), tty_ama.begin(), tty_ama.end());
 
     const auto tty_usb = SerialCandidatesWithPrefix("/dev", "ttyUSB");
     candidates.insert(candidates.end(), tty_usb.begin(), tty_usb.end());
@@ -169,10 +183,14 @@ class Stp23DriverNode : public rclcpp::Node {
     }
 
     const auto stamp = now();
-    if (has_package && publish_point_) {
+    if (has_package && (publish_point_ || publish_range_)) {
       for (const auto &point : package_points) {
-        PublishPoint(point, stamp);
-        PublishRange(point, stamp);
+        if (publish_point_) {
+          PublishPoint(point, stamp);
+        }
+        if (publish_range_) {
+          PublishRange(point, stamp);
+        }
       }
     }
     if (has_frame && publish_scan_) {

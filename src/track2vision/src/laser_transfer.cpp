@@ -2,6 +2,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_ros/transform_listener.h>
@@ -21,6 +22,8 @@ class CartographerLaserTransfer : public rclcpp::Node
 public:
     CartographerLaserTransfer() : Node("cartographer_laser_transfer")
     {
+        rangefinder_z_offset_m_ = declare_parameter<double>("rangefinder_z_offset_m", 0.115);
+
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
@@ -37,6 +40,14 @@ public:
             "/mavros/imu/data",
             rclcpp::SensorDataQoS(),
             std::bind(&CartographerLaserTransfer::imu_callback, this, std::placeholders::_1));
+        local_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "/mavros/local_position/pose",
+            rclcpp::SensorDataQoS(),
+            std::bind(&CartographerLaserTransfer::local_pose_callback, this, std::placeholders::_1));
+        range_sub_ = this->create_subscription<sensor_msgs::msg::Range>(
+            "/stp23/range",
+            rclcpp::SensorDataQoS(),
+            std::bind(&CartographerLaserTransfer::range_callback, this, std::placeholders::_1));
 
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(40),
@@ -52,6 +63,47 @@ private:
         imu_received_ = true;
     }
 
+    void local_pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        latest_local_z_ = msg->pose.position.z;
+        local_pose_received_ = true;
+    }
+
+    void range_callback(const sensor_msgs::msg::Range::SharedPtr msg)
+    {
+        if (!std::isfinite(msg->range) || msg->range < msg->min_range || msg->range > msg->max_range)
+        {
+            return;
+        }
+
+        const rclcpp::Time stamp(msg->header.stamp);
+        const double vehicle_z_enu = static_cast<double>(msg->range) + rangefinder_z_offset_m_;
+
+        if (range_received_)
+        {
+            const double dt = (stamp - latest_range_time_).seconds();
+            if (dt > 0.005 && dt < 0.5)
+            {
+                constexpr double max_vertical_speed_mps = 3.0;
+                constexpr double velocity_deadband_mps = 0.02;
+                constexpr double alpha = 0.35;
+
+                double measured_vz = (vehicle_z_enu - latest_range_z_enu_) / dt;
+                measured_vz = std::clamp(
+                    measured_vz, -max_vertical_speed_mps, max_vertical_speed_mps);
+                if (std::abs(measured_vz) < velocity_deadband_mps)
+                {
+                    measured_vz = 0.0;
+                }
+                filtered_vz_enu_ += alpha * (measured_vz - filtered_vz_enu_);
+            }
+        }
+
+        latest_range_time_ = stamp;
+        latest_range_z_enu_ = vehicle_z_enu;
+        range_received_ = true;
+    }
+
     void publish_vision_odometry()
     {
         if (!imu_received_)
@@ -59,6 +111,13 @@ private:
             publish_stability_wait("waiting_imu");
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                                  "IMU data not received yet, waiting...");
+            return;
+        }
+        if (!range_received_ && !local_pose_received_)
+        {
+            publish_stability_wait("waiting_height");
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                 "Height source not received yet, waiting...");
             return;
         }
 
@@ -99,7 +158,7 @@ private:
         pose_msg.header.frame_id = "map";
         pose_msg.pose.position.x = x;
         pose_msg.pose.position.y = y;
-        pose_msg.pose.position.z = 0.0;
+        pose_msg.pose.position.z = range_received_ ? latest_range_z_enu_ : latest_local_z_;
         pose_msg.pose.orientation = tf2::toMsg(q_yaw);
 
         nav_msgs::msg::Odometry odom_msg;
@@ -108,7 +167,7 @@ private:
         odom_msg.pose.pose = pose_msg.pose;
         odom_msg.twist.twist.linear.x = filtered_vx_body_;
         odom_msg.twist.twist.linear.y = filtered_vy_body_;
-        odom_msg.twist.twist.linear.z = 0.0;
+        odom_msg.twist.twist.linear.z = range_received_ ? filtered_vz_enu_ : 0.0;
         odom_msg.twist.twist.angular.x = 0.0;
         odom_msg.twist.twist.angular.y = 0.0;
         odom_msg.twist.twist.angular.z = 0.0;
@@ -214,14 +273,14 @@ private:
 
         odom_msg.pose.covariance[0] = 0.04;
         odom_msg.pose.covariance[7] = 0.04;
-        odom_msg.pose.covariance[14] = 1.0;
+        odom_msg.pose.covariance[14] = range_received_ ? 0.04 : 10000.0;
         odom_msg.pose.covariance[21] = 0.25;
         odom_msg.pose.covariance[28] = 0.25;
         odom_msg.pose.covariance[35] = 0.10;
 
         odom_msg.twist.covariance[0] = 0.04;
         odom_msg.twist.covariance[7] = 0.04;
-        odom_msg.twist.covariance[14] = 1.0;
+        odom_msg.twist.covariance[14] = range_received_ ? 0.09 : 10000.0;
         odom_msg.twist.covariance[21] = 1.0;
         odom_msg.twist.covariance[28] = 1.0;
         odom_msg.twist.covariance[35] = 1.0;
@@ -423,6 +482,8 @@ private:
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ev_stable_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ev_stability_status_pub_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr local_pose_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr range_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -430,6 +491,13 @@ private:
 
     rclcpp::Time latest_imu_time_;
     bool imu_received_ = false;
+    bool local_pose_received_ = false;
+    double latest_local_z_ = 0.0;
+    bool range_received_ = false;
+    rclcpp::Time latest_range_time_;
+    double latest_range_z_enu_ = 0.0;
+    double filtered_vz_enu_ = 0.0;
+    double rangefinder_z_offset_m_ = 0.115;
 
     struct PoseSample
     {

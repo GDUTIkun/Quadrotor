@@ -15,7 +15,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument("port_name", default_value="auto"),
+            DeclareLaunchArgument("port_name", default_value="/dev/ttyAMA4"),
             DeclareLaunchArgument("frame_id", default_value="lidar_frame"),
             Node(
                 package="stp23_ros2",

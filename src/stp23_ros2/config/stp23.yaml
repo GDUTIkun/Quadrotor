@@ -1,7 +1,7 @@
 stp23_node:
   ros__parameters:
     product_name: "LDLiDAR_STP23"
-    port_name: "auto"
+    port_name: "/dev/ttyAMA4"
     baudrate: 921600
     hardware_flow_control: false
     frame_id: "lidar_frame"
@@ -9,8 +9,8 @@ stp23_node:
     distance_topic: "/ldlidar_distance"
     range_topic: "/stp23/range"
     scan_topic: "scan"
-    publish_scan: true
-    publish_point: true
+    publish_scan: false
+    publish_point: false
     publish_range: true
     scan_angle_increment_deg: 1.0
     range_min: 0.02

@@ -155,7 +155,13 @@ int LSIOSR::read(unsigned char *buffer, int length, int timeout)
       }
       else if (rc < 0)
       {
-        printf("error \n");
+        if (errno == EINTR) {
+          continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          break;
+        }
+        perror("serial read error");
         retry--;
         if (retry <= 0)
         {

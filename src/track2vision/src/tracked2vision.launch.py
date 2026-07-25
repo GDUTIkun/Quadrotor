@@ -12,6 +12,7 @@ CARTOGRAPHER_START_DELAY_SECONDS = 3.0
 def generate_launch_description():
     # 获取包的路径
     lslidar_driver_launch_path = PathJoinSubstitution([FindPackageShare("lslidar_driver"), "launch", "lsm10_uart_launch.py"])
+    stp23_config_file = PathJoinSubstitution([FindPackageShare("stp23_ros2"), "config", "stp23.yaml"])
     # 实时建图版：
     cartographer_ros_launch_path = PathJoinSubstitution([FindPackageShare("carto"), "launch", "my_laser_with_imu.launch.py"])
     # pbstream localization 版：
@@ -25,10 +26,29 @@ def generate_launch_description():
             description="Path to the saved Cartographer .pbstream map for localization.",
         ),
 
+        DeclareLaunchArgument(
+            "stp23_port_name",
+            default_value="/dev/ttyAMA4",
+            description="Serial device for the STP23 lidar.",
+        ),
+
         # 底层数据源先启动；依赖数据和 TF 的节点会在自身逻辑里等待就绪。
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(lslidar_driver_launch_path),
             launch_arguments={}.items()
+        ),
+
+        Node(
+            package='stp23_ros2',
+            executable='stp23_node',
+            name='stp23_node',
+            output='screen',
+            parameters=[
+                stp23_config_file,
+                {
+                    'port_name': LaunchConfiguration('stp23_port_name'),
+                },
+            ],
         ),
 
         IncludeLaunchDescription(

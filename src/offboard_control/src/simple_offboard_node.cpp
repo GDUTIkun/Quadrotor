@@ -28,7 +28,7 @@ public:
         declare_parameter<bool>("auto_arm", true);
         declare_parameter<double>("takeoff_x", 0.0);
         declare_parameter<double>("takeoff_y", 0.0);
-        declare_parameter<double>("takeoff_z", 0.5);
+        declare_parameter<double>("takeoff_z", 0.8);
         declare_parameter<double>("arrival_tolerance", 0.12);
         declare_parameter<double>("setpoint_lowpass_min_tau", 0.0);
         declare_parameter<double>("setpoint_lowpass_near_error", 0.5);

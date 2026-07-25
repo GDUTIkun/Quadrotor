@@ -491,7 +491,7 @@ void DistanceSensorItem::range_cb(const Range::SharedPtr msg)
     msg->field_of_view * horizontal_fov_ratio,
     msg->field_of_view * vertical_fov_ratio,
     q,
-    0);
+    100);
 }
 
 }       // namespace extra_plugins
