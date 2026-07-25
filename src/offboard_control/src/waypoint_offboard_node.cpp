@@ -47,6 +47,8 @@ public:
         declare_parameter<double>("landing_ground_z_tolerance", 0.15);
         declare_parameter<double>("landing_xy_tolerance", 0.25);
         declare_parameter<double>("landing_settle_time", 1.0);
+        declare_parameter<double>("landing_touchdown_sink", 0.12);
+        declare_parameter<bool>("request_auto_land_before_disarm", true);
         declare_parameter<double>("disarm_request_interval", 1.0);
 
         state_sub_ = create_subscription<mavros_msgs::msg::State>(
@@ -173,7 +175,7 @@ private:
         }
 
         if (phase == Phase::MISSION_COMPLETE) {
-            publish_position(landing_plan_initialized_ ? landing_ground_target_ : active_target(), false);
+            publish_position(landing_plan_initialized_ ? landing_touchdown_target_ : active_target(), false);
             return;
         }
 
@@ -203,7 +205,7 @@ private:
         }
 
         if (phase == Phase::LANDING_SETTLE) {
-            publish_position(landing_ground_target_, false);
+            publish_position(landing_touchdown_target_, false);
 
             if ((now() - landing_settle_start_time_).seconds() >=
                 get_parameter("landing_settle_time").as_double()) {
@@ -213,7 +215,7 @@ private:
         }
 
         if (phase == Phase::DISARMING) {
-            publish_position(landing_ground_target_, false);
+            publish_position(landing_touchdown_target_, false);
 
             if (!current_state_.armed) {
                 phase_.store(Phase::MISSION_COMPLETE);
@@ -292,6 +294,11 @@ private:
             takeoff.y,
             get_parameter("landing_ground_z").as_double(),
         };
+        landing_touchdown_target_ = Target{
+            landing_ground_target_.x,
+            landing_ground_target_.y,
+            landing_ground_target_.z - std::abs(get_parameter("landing_touchdown_sink").as_double()),
+        };
 
         const double angle_deg = std::clamp(
             std::abs(get_parameter("landing_descent_angle_deg").as_double()), 1.0, 89.0);
@@ -324,11 +331,12 @@ private:
         phase_.store(Phase::RETURNING_HOME_APPROACH);
 
         RCLCPP_INFO(get_logger(),
-                    "Reached final waypoint %zu/%zu. Returning to landing approach point %.3f %.3f %.3f, then %.1f deg landing to takeoff point %.3f %.3f %.3f.",
+                    "Reached final waypoint %zu/%zu. Returning to landing approach point %.3f %.3f %.3f, then %.1f deg landing to takeoff point %.3f %.3f %.3f. Touchdown hold setpoint: %.3f %.3f %.3f.",
                     active_index_ + 1U, waypoint_count(),
                     landing_approach_target_.x, landing_approach_target_.y, landing_approach_target_.z,
                     angle_deg,
-                    landing_ground_target_.x, landing_ground_target_.y, landing_ground_target_.z);
+                    landing_ground_target_.x, landing_ground_target_.y, landing_ground_target_.z,
+                    landing_touchdown_target_.x, landing_touchdown_target_.y, landing_touchdown_target_.z);
     }
 
     void start_45_degree_landing()
@@ -403,7 +411,8 @@ private:
         landing_settle_start_time_ = now();
         phase_.store(Phase::LANDING_SETTLE);
         RCLCPP_INFO(get_logger(),
-                    "45 degree landing target reached. Holding landing point for %.2f s before disarm.",
+                    "45 degree landing target reached. Holding touchdown setpoint %.3f %.3f %.3f for %.2f s before disarm.",
+                    landing_touchdown_target_.x, landing_touchdown_target_.y, landing_touchdown_target_.z,
                     get_parameter("landing_settle_time").as_double());
     }
 
@@ -411,7 +420,8 @@ private:
     {
         last_disarm_request_time_ = now();
         phase_.store(Phase::DISARMING);
-        RCLCPP_INFO(get_logger(), "Landing settle complete. Requesting disarm.");
+        RCLCPP_INFO(get_logger(), "Landing settle complete. Requesting land mode and disarm.");
+        request_land_mode_if_needed();
         send_disarm_request();
     }
 
@@ -423,7 +433,26 @@ private:
         }
 
         last_disarm_request_time_ = now();
+        request_land_mode_if_needed();
         send_disarm_request();
+    }
+
+    void request_land_mode_if_needed()
+    {
+        if (!get_parameter("request_auto_land_before_disarm").as_bool() ||
+            current_state_.mode == "AUTO.LAND") {
+            return;
+        }
+
+        if (!set_mode_client_->service_is_ready()) {
+            RCLCPP_WARN(get_logger(), "set_mode service not ready. AUTO.LAND request delayed.");
+            return;
+        }
+
+        auto req = std::make_shared<mavros_msgs::srv::SetMode::Request>();
+        req->custom_mode = "AUTO.LAND";
+        set_mode_client_->async_send_request(req);
+        RCLCPP_INFO(get_logger(), "Requesting AUTO.LAND before disarm...");
     }
 
     void send_disarm_request()
@@ -764,6 +793,7 @@ private:
     Target lowpass_target_{0.0, 0.0, 0.0};
     Target landing_approach_target_{0.0, 0.0, 0.0};
     Target landing_ground_target_{0.0, 0.0, 0.0};
+    Target landing_touchdown_target_{0.0, 0.0, 0.0};
     Target landing_start_target_{0.0, 0.0, 0.0};
     double active_lowpass_tau_{0.0};
     double landing_total_distance_{0.0};
