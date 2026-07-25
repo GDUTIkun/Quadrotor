@@ -8,6 +8,7 @@
 #include <deque>
 #include <fcntl.h>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <queue>
@@ -21,6 +22,7 @@
 
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
 
 // 独立的八方向低重复航点 ROS 2 节点，不依赖也不修改原 PathPlanner。
 
@@ -530,6 +532,7 @@ public:
 
     auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
     path_publisher_ = create_publisher<nav_msgs::msg::Path>("patrol_path", qos);
+    grid_path_publisher_ = create_publisher<std_msgs::msg::String>("patrol_path_grid", qos);
     serial_timer_ = create_wall_timer(
       std::chrono::milliseconds(serial_poll_ms_), [this]() {onSerialTimer();});
 
@@ -725,9 +728,14 @@ private:
       message.poses.push_back(pose);
     }
     path_publisher_->publish(message);
+
+    std_msgs::msg::String grid_message;
+    grid_message.data = routeText(path);
+    grid_path_publisher_->publish(grid_message);
+
     queueDrawCommands(path);
     RCLCPP_INFO(
-      get_logger(), "OK COUNT=%zu PATH=%s", path.size(), routeText(path).c_str());
+      get_logger(), "OK COUNT=%zu PATH=%s", path.size(), grid_message.data.c_str());
   }
 
   void queueDrawCommands(const std::vector<int> & path)
@@ -801,11 +809,30 @@ private:
   double origin_x_{};
   double origin_y_{};
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr grid_path_publisher_;
   rclcpp::TimerBase::SharedPtr serial_timer_;
 };
 
 int main(int argc, char * argv[])
 {
+  if (argc >= 2 && std::string(argv[1]) == "--plan") {
+    try {
+      std::vector<std::string> codes;
+      codes.reserve(static_cast<std::size_t>(argc - 2));
+      for (int index = 2; index < argc; ++index) {
+        codes.emplace_back(argv[index]);
+      }
+      const std::uint64_t blocked = validateBlocked(codes);
+      const std::vector<int> path = planLowRepeat(blocked);
+      checkPath(path, blocked);
+      std::cout << routeText(path) << '\n';
+      return 0;
+    } catch (const std::exception & error) {
+      std::cerr << error.what() << '\n';
+      return 1;
+    }
+  }
+
   rclcpp::init(argc, argv);
   try {
     rclcpp::spin(std::make_shared<BestPathPlannerNode>());

@@ -17,7 +17,7 @@ def generate_launch_description():
             DeclareLaunchArgument("path_color", default_value="2016"),
             DeclareLaunchArgument("log_serial_rx", default_value="true"),
             Node(
-                package="quadrotor_ground_station",
+                package="nuedc25_ground_station",
                 executable="best_path_planner_node",
                 name="best_path_planner",
                 output="screen",

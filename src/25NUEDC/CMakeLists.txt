@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(quadrotor_ground_station)
+project(nuedc25_ground_station)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -12,6 +12,7 @@ find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 
 add_executable(hmi_touch_verify_node src/hmi_touch_verify_node.cpp)
 ament_target_dependencies(hmi_touch_verify_node rclcpp)
@@ -27,12 +28,27 @@ ament_target_dependencies(best_path_planner_node
   geometry_msgs
   nav_msgs
   rclcpp
+  std_msgs
+)
+
+add_executable(ground_station_path_node src/ground_station_path_node.cpp)
+ament_target_dependencies(ground_station_path_node
+  geometry_msgs
+  nav_msgs
+  rclcpp
+  std_msgs
 )
 
 install(TARGETS
   hmi_touch_verify_node
   serial_loopback_test_node
   best_path_planner_node
+  ground_station_path_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/ground_station_gui.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -50,3 +50,17 @@ ROS_LOCALHOST_ONLY=1 ros2 launch quadrotor_ground_station serial_loopback_test.l
 ```
 
 看到连续 `PASS` 表示 Orange Pi 的 UART7 自发自收正常。
+
+
+
+
+
+调用：
+source /opt/ros/humble/setup.bash
+colcon build --packages-select nuedc25_ground_station
+source install/setup.bash
+ros2 launch nuedc25_ground_station ground_station_gui.launch.py
+
+kill:
+pkill -f ground_station_gui.py
+pkill -f "ros2 launch quadrotor_ground_station"

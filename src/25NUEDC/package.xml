@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>quadrotor_ground_station</name>
+  <name>nuedc25_ground_station</name>
   <version>0.1.0</version>
-  <description>Minimal ROS2 serial touch-frame verification for the TJC USART HMI.</description>
+  <description>ROS2 ground station tools for serial HMI verification and HDMI touch-screen GUI.</description>
   <maintainer email="user@example.com">Tan Dachao</maintainer>
   <license>MIT</license>
 
@@ -12,6 +12,8 @@
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>rclpy</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
