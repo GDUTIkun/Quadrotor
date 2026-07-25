@@ -31,11 +31,23 @@ public:
         declare_parameter<double>("arrival_tolerance", 0.12);
         declare_parameter<double>("setpoint_lowpass_min_tau", 0.0);
         declare_parameter<double>("setpoint_lowpass_near_error", 0.5);
-        declare_parameter<double>("setpoint_lowpass_near_tau", 0.6);
+        declare_parameter<double>("setpoint_lowpass_near_tau", 0.7);
         declare_parameter<double>("setpoint_lowpass_far_error", 2.0);
-        declare_parameter<double>("setpoint_lowpass_far_tau", 1.2);
+        declare_parameter<double>("setpoint_lowpass_far_tau", 1.3);
         declare_parameter<double>("setpoint_snap_tolerance", 0.02);
-        declare_parameter<bool>("enable_terminal_input", true);
+        // declare_parameter<bool>("enable_terminal_input", true);
+        declare_parameter<bool>("enable_terminal_input", false);
+        declare_parameter<bool>("auto_advance_waypoints", true);
+        declare_parameter<bool>("return_home_and_land_after_mission", true);
+        declare_parameter<double>("landing_ground_z", 0.25);
+        declare_parameter<double>("landing_descent_angle_deg", 45.0);
+        declare_parameter<double>("landing_path_speed", 0.25);
+        declare_parameter<double>("landing_min_path_speed", 0.08);
+        declare_parameter<double>("landing_slowdown_distance", 0.8);
+        declare_parameter<double>("landing_ground_z_tolerance", 0.15);
+        declare_parameter<double>("landing_xy_tolerance", 0.25);
+        declare_parameter<double>("landing_settle_time", 1.0);
+        declare_parameter<double>("disarm_request_interval", 1.0);
 
         state_sub_ = create_subscription<mavros_msgs::msg::State>(
             "mavros/state", 10,
@@ -101,6 +113,10 @@ private:
         STARTING_OFFBOARD,
         FLYING_WAYPOINT,
         HOLDING_WAYPOINT,
+        RETURNING_HOME_APPROACH,
+        LANDING_45_DEG,
+        LANDING_SETTLE,
+        DISARMING,
         MISSION_COMPLETE,
     };
 
@@ -133,6 +149,7 @@ private:
             active_index_ = 0;
             waypoint_reached_ = false;
             advance_requested_ = false;
+            landing_plan_initialized_ = false;
             phase_.store(Phase::STARTING_OFFBOARD);
         }
 
@@ -156,7 +173,57 @@ private:
         }
 
         if (phase == Phase::MISSION_COMPLETE) {
-            publish_position(active_target());
+            publish_position(landing_plan_initialized_ ? landing_ground_target_ : active_target(), false);
+            return;
+        }
+
+        if (phase == Phase::RETURNING_HOME_APPROACH) {
+            publish_position(landing_approach_target_);
+
+            if (!pose_received_) {
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                     "Waiting for local position while returning to landing approach point.");
+                return;
+            }
+
+            if (is_at_target(landing_approach_target_)) {
+                start_45_degree_landing();
+            }
+            return;
+        }
+
+        if (phase == Phase::LANDING_45_DEG) {
+            const Target landing_setpoint = current_landing_setpoint();
+            publish_position(landing_setpoint, false);
+
+            if (is_landing_complete()) {
+                start_landing_settle();
+            }
+            return;
+        }
+
+        if (phase == Phase::LANDING_SETTLE) {
+            publish_position(landing_ground_target_, false);
+
+            if ((now() - landing_settle_start_time_).seconds() >=
+                get_parameter("landing_settle_time").as_double()) {
+                start_disarming();
+            }
+            return;
+        }
+
+        if (phase == Phase::DISARMING) {
+            publish_position(landing_ground_target_, false);
+
+            if (!current_state_.armed) {
+                phase_.store(Phase::MISSION_COMPLETE);
+                RCLCPP_INFO(get_logger(),
+                            "Vehicle disarmed. Mission complete at takeoff point: %.3f %.3f %.3f.",
+                            landing_ground_target_.x, landing_ground_target_.y, landing_ground_target_.z);
+                return;
+            }
+
+            request_disarm_if_needed();
             return;
         }
 
@@ -186,10 +253,14 @@ private:
             request_yolo_snapshot_if_needed(active_index_);
 
             if (active_index_ + 1U >= waypoint_count()) {
-                phase_.store(Phase::MISSION_COMPLETE);
-                RCLCPP_INFO(get_logger(),
-                            "Reached final waypoint %zu/%zu. Mission complete, holding position.",
-                            active_index_ + 1U, waypoint_count());
+                if (get_parameter("return_home_and_land_after_mission").as_bool()) {
+                    begin_return_home_landing();
+                } else {
+                    phase_.store(Phase::MISSION_COMPLETE);
+                    RCLCPP_INFO(get_logger(),
+                                "Reached final waypoint %zu/%zu. Mission complete, holding position.",
+                                active_index_ + 1U, waypoint_count());
+                }
                 return;
             }
 
@@ -209,6 +280,171 @@ private:
                         "Flying to waypoint %zu/%zu: %.3f %.3f %.3f.",
                         active_index_ + 1U, waypoint_count(), next.x, next.y, next.z);
         }
+    }
+
+    void begin_return_home_landing()
+    {
+        const Target takeoff = first_target();
+        const Target final_waypoint = active_target();
+
+        landing_ground_target_ = Target{
+            takeoff.x,
+            takeoff.y,
+            get_parameter("landing_ground_z").as_double(),
+        };
+
+        const double angle_deg = std::clamp(
+            std::abs(get_parameter("landing_descent_angle_deg").as_double()), 1.0, 89.0);
+        const double angle_rad = angle_deg * M_PI / 180.0;
+        const double descent_height = std::abs(takeoff.z - landing_ground_target_.z);
+        const double approach_distance = descent_height / std::tan(angle_rad);
+
+        double dir_x = final_waypoint.x - landing_ground_target_.x;
+        double dir_y = final_waypoint.y - landing_ground_target_.y;
+        double dir_norm = std::sqrt(dir_x * dir_x + dir_y * dir_y);
+
+        if (dir_norm <= 1e-3 && pose_received_) {
+            dir_x = current_pose_.pose.position.x - landing_ground_target_.x;
+            dir_y = current_pose_.pose.position.y - landing_ground_target_.y;
+            dir_norm = std::sqrt(dir_x * dir_x + dir_y * dir_y);
+        }
+
+        if (dir_norm <= 1e-3) {
+            dir_x = initial_yaw_captured_ ? std::cos(initial_yaw_) : 1.0;
+            dir_y = initial_yaw_captured_ ? std::sin(initial_yaw_) : 0.0;
+            dir_norm = std::sqrt(dir_x * dir_x + dir_y * dir_y);
+        }
+
+        landing_approach_target_ = Target{
+            landing_ground_target_.x + dir_x / dir_norm * approach_distance,
+            landing_ground_target_.y + dir_y / dir_norm * approach_distance,
+            takeoff.z,
+        };
+        landing_plan_initialized_ = true;
+        phase_.store(Phase::RETURNING_HOME_APPROACH);
+
+        RCLCPP_INFO(get_logger(),
+                    "Reached final waypoint %zu/%zu. Returning to landing approach point %.3f %.3f %.3f, then %.1f deg landing to takeoff point %.3f %.3f %.3f.",
+                    active_index_ + 1U, waypoint_count(),
+                    landing_approach_target_.x, landing_approach_target_.y, landing_approach_target_.z,
+                    angle_deg,
+                    landing_ground_target_.x, landing_ground_target_.y, landing_ground_target_.z);
+    }
+
+    void start_45_degree_landing()
+    {
+        landing_start_target_ = landing_approach_target_;
+        landing_progress_ = 0.0;
+        landing_last_update_time_ = now();
+        landing_total_distance_ = distance_between(landing_start_target_, landing_ground_target_);
+        phase_.store(Phase::LANDING_45_DEG);
+
+        RCLCPP_INFO(get_logger(),
+                    "Landing approach point reached. Starting slow 45 degree landing over %.2f m.",
+                    landing_total_distance_);
+    }
+
+    Target current_landing_setpoint()
+    {
+        update_landing_progress();
+        return Target{
+            landing_start_target_.x + (landing_ground_target_.x - landing_start_target_.x) * landing_progress_,
+            landing_start_target_.y + (landing_ground_target_.y - landing_start_target_.y) * landing_progress_,
+            landing_start_target_.z + (landing_ground_target_.z - landing_start_target_.z) * landing_progress_,
+        };
+    }
+
+    void update_landing_progress()
+    {
+        const auto current_time = now();
+        const double dt = std::clamp((current_time - landing_last_update_time_).seconds(), 0.001, 0.1);
+        landing_last_update_time_ = current_time;
+
+        if (landing_total_distance_ <= 1e-6 || landing_progress_ >= 1.0) {
+            landing_progress_ = 1.0;
+            return;
+        }
+
+        const double normal_speed = std::max(0.05, get_parameter("landing_path_speed").as_double());
+        const double min_speed = std::clamp(
+            get_parameter("landing_min_path_speed").as_double(), 0.02, normal_speed);
+        const double slowdown_distance =
+            std::max(0.0, get_parameter("landing_slowdown_distance").as_double());
+        const double remaining_distance = landing_total_distance_ * (1.0 - landing_progress_);
+
+        double speed = normal_speed;
+        if (slowdown_distance > 1e-6 && remaining_distance < slowdown_distance) {
+            const double ratio = std::clamp(remaining_distance / slowdown_distance, 0.0, 1.0);
+            speed = min_speed + (normal_speed - min_speed) * ratio;
+        }
+
+        landing_progress_ = std::clamp(
+            landing_progress_ + speed * dt / landing_total_distance_, 0.0, 1.0);
+    }
+
+    bool is_landing_complete() const
+    {
+        if (!pose_received_ || landing_progress_ < 1.0) {
+            return false;
+        }
+
+        const auto& p = current_pose_.pose.position;
+        const double dx = p.x - landing_ground_target_.x;
+        const double dy = p.y - landing_ground_target_.y;
+        const double xy_error = std::sqrt(dx * dx + dy * dy);
+        const double z_error = std::abs(p.z - landing_ground_target_.z);
+
+        return xy_error <= get_parameter("landing_xy_tolerance").as_double() &&
+               z_error <= get_parameter("landing_ground_z_tolerance").as_double();
+    }
+
+    void start_landing_settle()
+    {
+        landing_settle_start_time_ = now();
+        phase_.store(Phase::LANDING_SETTLE);
+        RCLCPP_INFO(get_logger(),
+                    "45 degree landing target reached. Holding landing point for %.2f s before disarm.",
+                    get_parameter("landing_settle_time").as_double());
+    }
+
+    void start_disarming()
+    {
+        last_disarm_request_time_ = now();
+        phase_.store(Phase::DISARMING);
+        RCLCPP_INFO(get_logger(), "Landing settle complete. Requesting disarm.");
+        send_disarm_request();
+    }
+
+    void request_disarm_if_needed()
+    {
+        if ((now() - last_disarm_request_time_).seconds() <
+            get_parameter("disarm_request_interval").as_double()) {
+            return;
+        }
+
+        last_disarm_request_time_ = now();
+        send_disarm_request();
+    }
+
+    void send_disarm_request()
+    {
+        if (!arming_client_->service_is_ready()) {
+            RCLCPP_WARN(get_logger(), "arming service not ready. Disarm request delayed.");
+            return;
+        }
+
+        auto req = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
+        req->value = false;
+        arming_client_->async_send_request(req);
+        RCLCPP_INFO(get_logger(), "Requesting disarm...");
+    }
+
+    static double distance_between(const Target& lhs, const Target& rhs)
+    {
+        const double dx = lhs.x - rhs.x;
+        const double dy = lhs.y - rhs.y;
+        const double dz = lhs.z - rhs.z;
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
     }
 
     void request_yolo_snapshot_if_needed(std::size_t waypoint_index)
@@ -313,9 +549,13 @@ private:
                           1.0 - 2.0 * (q.y * q.y + q.z * q.z));
     }
 
-    void publish_position(const Target& target)
+    void publish_position(const Target& target, bool smooth_xy = true)
     {
-        update_lowpass_setpoint(target);
+        if (smooth_xy) {
+            update_lowpass_setpoint(target);
+        } else {
+            reset_shaped_setpoint(target);
+        }
 
         mavros_msgs::msg::PositionTarget msg;
         msg.header.stamp = now();
@@ -341,6 +581,17 @@ private:
         }
 
         setpoint_pub_->publish(msg);
+    }
+
+    void reset_shaped_setpoint(const Target& target)
+    {
+        shaped_x_ = target.x;
+        shaped_y_ = target.y;
+        shaped_z_ = target.z;
+        shaped_setpoint_initialized_ = true;
+        lowpass_target_ = target;
+        lowpass_target_initialized_ = true;
+        last_shaping_time_ = now();
     }
 
     void update_lowpass_setpoint(const Target& target)
@@ -465,7 +716,9 @@ private:
             return;
         }
 
-        if (phase == Phase::STARTING_OFFBOARD || phase == Phase::FLYING_WAYPOINT) {
+        if (phase == Phase::STARTING_OFFBOARD || phase == Phase::FLYING_WAYPOINT ||
+            phase == Phase::RETURNING_HOME_APPROACH || phase == Phase::LANDING_45_DEG ||
+            phase == Phase::LANDING_SETTLE || phase == Phase::DISARMING) {
             RCLCPP_WARN(get_logger(), "Enter ignored: active waypoint has not been reached yet.");
             return;
         }
@@ -485,6 +738,12 @@ private:
         return waypoints_.at(active_index_);
     }
 
+    Target first_target() const
+    {
+        std::lock_guard<std::mutex> lock(waypoint_mutex_);
+        return waypoints_.front();
+    }
+
     std::size_t waypoint_count() const
     {
         std::lock_guard<std::mutex> lock(waypoint_mutex_);
@@ -497,12 +756,18 @@ private:
     bool waypoint_reached_{false};
     bool shaped_setpoint_initialized_{false};
     bool lowpass_target_initialized_{false};
+    bool landing_plan_initialized_{false};
     double initial_yaw_{0.0};
     double shaped_x_{0.0};
     double shaped_y_{0.0};
     double shaped_z_{0.0};
     Target lowpass_target_{0.0, 0.0, 0.0};
+    Target landing_approach_target_{0.0, 0.0, 0.0};
+    Target landing_ground_target_{0.0, 0.0, 0.0};
+    Target landing_start_target_{0.0, 0.0, 0.0};
     double active_lowpass_tau_{0.0};
+    double landing_total_distance_{0.0};
+    double landing_progress_{0.0};
     std::size_t active_index_{0};
     std::atomic_bool advance_requested_{false};
     std::atomic_bool terminal_thread_running_{false};
@@ -514,6 +779,9 @@ private:
     geometry_msgs::msg::PoseStamped current_pose_;
     rclcpp::Time last_request_time_;
     rclcpp::Time last_shaping_time_;
+    rclcpp::Time landing_last_update_time_;
+    rclcpp::Time landing_settle_start_time_;
+    rclcpp::Time last_disarm_request_time_;
 
     rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;

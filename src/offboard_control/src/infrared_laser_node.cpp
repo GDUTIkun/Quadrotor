@@ -277,3 +277,11 @@ int main(int argc, char * argv[])
   rclcpp::shutdown();
   return 0;
 }
+
+
+
+/*
+ros2 topic pub --once /infrared_laser/enable std_msgs/msg/Bool "{data: true}"
+ros2 topic pub --once /infrared_laser/enable std_msgs/msg/Bool "{data: false}"
+
+*/
