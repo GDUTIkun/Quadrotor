@@ -1,0 +1,42 @@
+# 编译输出
+Debug/
+Release/
+build/
+cmake-build-*/
+
+# 编译中间文件
+*.o
+*.obj
+*.d
+*.dep
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.lst
+
+# 编辑器
+.vscode/
+.idea/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 日志
+*.log
