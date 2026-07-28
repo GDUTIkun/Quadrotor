@@ -38,6 +38,14 @@ from stm_bridge.protocol import (
 GRAVITY = 9.80665
 
 
+def as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
 def yaw_to_quaternion(yaw: float):
     q = type('QuaternionTuple', (), {})()
     q.x = 0.0
@@ -80,7 +88,7 @@ class StmBridgeNode(Node):
         self.cmd_timeout_s = float(self.get_parameter('cmd_timeout_s').value)
         self.base_frame_id = self.get_parameter('base_frame_id').value
         self.odom_frame_id = self.get_parameter('odom_frame_id').value
-        self.publish_odom_tf = bool(self.get_parameter('publish_odom_tf').value)
+        self.publish_odom_tf = as_bool(self.get_parameter('publish_odom_tf').value)
 
         self.parser = FrameParser()
         self.serial_port = None
@@ -88,6 +96,7 @@ class StmBridgeNode(Node):
         self.tx_frames = 0
         self.rx_frames = 0
         self.last_cmd = Twist()
+        self.has_cmd = False
         self.last_cmd_time = self.get_clock().now()
         self.last_status_stamp_ms = 0
 
@@ -103,6 +112,9 @@ class StmBridgeNode(Node):
         self.create_timer(max(0.001, 1.0 / self.cmd_rate_hz), self.send_cmd_vel)
         self.create_timer(0.002, self.read_serial)
         self.create_timer(1.0, self.reconnect_if_needed)
+        self.get_logger().info(
+            'STM protocol v1.0: 0x01 CMD_VEL, 0x81 IMU, 0x82 WHEEL_ODOM, 0x83 STATUS'
+        )
 
     def open_serial(self) -> None:
         if serial is None:
@@ -128,6 +140,7 @@ class StmBridgeNode(Node):
 
     def on_cmd_vel(self, msg: Twist) -> None:
         self.last_cmd = msg
+        self.has_cmd = True
         self.last_cmd_time = self.get_clock().now()
 
     def send_cmd_vel(self) -> None:
@@ -135,7 +148,7 @@ class StmBridgeNode(Node):
             return
 
         elapsed = (self.get_clock().now() - self.last_cmd_time).nanoseconds / 1e9
-        enabled = elapsed <= self.cmd_timeout_s
+        enabled = self.has_cmd and elapsed <= self.cmd_timeout_s
         v = self.last_cmd.linear.x if enabled else 0.0
         w = self.last_cmd.angular.z if enabled else 0.0
         payload = encode_cmd_vel(v, w, enabled)

@@ -176,45 +176,87 @@ car_bringup/launch/localization_control.launch.py
 - Cartographer 纯定位。
 - `point_controller` 定点控制节点。
 
-## 4. 串口通信协议
+## 4. STM 串口通信接口冻结版 v1.0
 
-### 4.1 通用帧格式
+本节作为 ROS 侧与 STM 侧的对接依据。STM 侧先按这里的帧格式发 `STATUS` 和 `IMU`，ROS 侧能解析并发布 topic 后，再联调 `CMD_VEL` 下发和轮式里程计。
 
-采用二进制小端协议：
+### 4.1 串口物理层
+
+| 项 | 约定 |
+| --- | --- |
+| 波特率 | `115200` |
+| 数据位 | 8 |
+| 校验位 | none |
+| 停止位 | 1 |
+| 流控 | none |
+| 字节序 | little-endian |
+| 有符号数 | 二进制补码 |
+| ROS 默认设备 | `/dev/wheeltec_controller` |
+
+如果 STM 侧现有波特率不是 `115200`，优先把 ROS 参数改成 STM 当前值，不强制 STM 先改固件。
+
+### 4.2 通用帧格式
 
 ```text
 header[2] + msg_id[1] + seq[1] + len[1] + payload[len] + crc16[2]
 ```
-
-字段说明：
 
 | 字段 | 长度 | 说明 |
 | --- | --- | --- |
 | `header` | 2 | 固定 `0xAA 0x55` |
 | `msg_id` | 1 | 消息 ID |
 | `seq` | 1 | 帧序号，0-255 循环 |
-| `len` | 1 | payload 长度 |
-| `payload` | N | 数据区 |
-| `crc16` | 2 | CRC-16/IBM，小端 |
+| `len` | 1 | payload 字节数 |
+| `payload` | N | 数据区，最大 64 字节 |
+| `crc16` | 2 | CRC-16/IBM，小端，低字节在前 |
+
+解析规则：
+
+- 收到非 `0xAA 0x55` 开头的数据时，逐字节丢弃直到重新找到帧头。
+- `len > 64` 视为异常帧，丢弃当前帧头并重新同步。
+- CRC 错误时丢弃当前帧头并重新同步。
+- 允许半包和粘包，ROS 侧解析器必须能缓存未完整帧。
 
 CRC 规则：
 
-- 使用 CRC-16/IBM，也称 CRC-16/ARC。
-- 多项式：`0x8005`
-- 初值：`0x0000`
-- 输入反射：是
-- 输出反射：是
-- xorout：`0x0000`
-- CRC 覆盖范围：`msg_id + seq + len + payload`
-- CRC 不覆盖 `header`
+| 项 | 值 |
+| --- | --- |
+| 名称 | CRC-16/IBM，也称 CRC-16/ARC |
+| 多项式 | `0x8005` |
+| 反向实现多项式 | `0xA001` |
+| 初值 | `0x0000` |
+| xorout | `0x0000` |
+| 输入反射 | true |
+| 输出反射 | true |
+| 覆盖范围 | `msg_id + seq + len + payload` |
+| 不覆盖 | `header` 和 `crc16` 本身 |
 
-### 4.2 ROS 到 STM
+校验向量：
 
-#### `0x01 CMD_VEL`
+```text
+crc16_ibm("123456789") = 0xBB3D
+```
 
-ROS 以固定频率下发底盘速度指令。
+### 4.3 消息总表
 
-payload：
+| msg_id | 方向 | 名称 | payload 长度 | 频率建议 |
+| --- | --- | --- | --- | --- |
+| `0x01` | ROS -> STM | `CMD_VEL` | 5 | 50 Hz |
+| `0x81` | STM -> ROS | `IMU` | 22 | 50-100 Hz |
+| `0x82` | STM -> ROS | `WHEEL_ODOM` | 24 | 20-50 Hz |
+| `0x83` | STM -> ROS | `STATUS` | 11 | 1-10 Hz |
+
+首轮通信测试最低要求：
+
+- STM 至少发送 `0x83 STATUS`，用于确认串口、帧头、长度和 CRC。
+- 然后发送 `0x81 IMU`，用于启动 Cartographer 需要的 `/track2vision/imu/data_valid`。
+- `0x82 WHEEL_ODOM` 可以稍后再接，首版 Cartographer 不依赖它。
+
+### 4.4 ROS -> STM：`0x01 CMD_VEL`
+
+ROS 以固定频率下发底盘速度指令。STM 收到后继续负责轮速解算和速度闭环。
+
+payload，长度 5：
 
 ```text
 int16 v_mm_s
@@ -222,13 +264,11 @@ int16 w_mrad_s
 uint8 enable
 ```
 
-字段说明：
-
-| 字段 | 单位 | 说明 |
-| --- | --- | --- |
-| `v_mm_s` | mm/s | 车体 x 方向线速度，前进为正 |
-| `w_mrad_s` | mrad/s | 车体 z 轴角速度，逆时针为正 |
-| `enable` | bool | `1` 表示使能运动，`0` 表示停车 |
+| 字段 | 单位 | 正方向 | 说明 |
+| --- | --- | --- | --- |
+| `v_mm_s` | mm/s | 前进为正 | 车体 x 方向线速度 |
+| `w_mrad_s` | mrad/s | 逆时针为正 | 车体 z 轴角速度 |
+| `enable` | bool | 1 使能 | `0` 表示停车 |
 
 ROS 侧转换：
 
@@ -237,17 +277,26 @@ v_mm_s = round(cmd_vel.linear.x * 1000)
 w_mrad_s = round(cmd_vel.angular.z * 1000)
 ```
 
-安全策略：
+安全约定：
 
-- ROS 侧 50 Hz 下发最新速度。
-- 超过 300 ms 未收到新的 `/cmd_vel`，ROS 侧下发 `v=0, w=0, enable=0`。
-- STM 侧也应实现独立 watchdog，建议 300-500 ms 未收到有效 `CMD_VEL` 后停车。
+- ROS 正常工作时 50 Hz 连续发送 `CMD_VEL`。
+- ROS 超过 300 ms 未收到新的 `/cmd_vel` 时，下发 `v=0, w=0, enable=0`。
+- STM 也必须做独立 watchdog，建议 300-500 ms 未收到有效 `CMD_VEL` 后立即停车。
+- STM 收到 `enable=0` 时应立即停车，并清除速度目标。
 
-### 4.3 STM 到 ROS
+样例帧：
 
-#### `0x81 IMU`
+```text
+# seq=0, v=0 mm/s, w=0 mrad/s, enable=0
+AA 55 01 00 05 00 00 00 00 00 C1 99
 
-payload：
+# seq=1, v=200 mm/s, w=0 mrad/s, enable=1
+AA 55 01 01 05 C8 00 00 00 01 F1 49
+```
+
+### 4.5 STM -> ROS：`0x81 IMU`
+
+payload，长度 22：
 
 ```text
 int16 ax_mg
@@ -262,20 +311,25 @@ int16 roll_cdeg
 uint32 stamp_ms
 ```
 
-字段说明：
-
 | 字段 | 单位 | 说明 |
 | --- | --- | --- |
-| `ax/ay/az_mg` | mg | 三轴线加速度 |
-| `gx/gy/gz_mdps` | mdps | 三轴角速度 |
-| `yaw/pitch/roll_cdeg` | 0.01 deg | 欧拉角 |
-| `stamp_ms` | ms | STM 侧毫秒时间戳 |
+| `ax_mg` | mg | x 轴线加速度 |
+| `ay_mg` | mg | y 轴线加速度 |
+| `az_mg` | mg | z 轴线加速度，水平静止约 `+1000` |
+| `gx_mdps` | mdps | x 轴角速度 |
+| `gy_mdps` | mdps | y 轴角速度 |
+| `gz_mdps` | mdps | z 轴角速度 |
+| `yaw_cdeg` | 0.01 deg | yaw，绕 z 轴 |
+| `pitch_cdeg` | 0.01 deg | pitch，绕 y 轴 |
+| `roll_cdeg` | 0.01 deg | roll，绕 x 轴 |
+| `stamp_ms` | ms | STM 上电后的毫秒时间戳 |
 
 ROS 发布：
 
 - Topic：`/track2vision/imu/data_valid`
 - 类型：`sensor_msgs/msg/Imu`
-- `frame_id = base_link`
+- `header.frame_id = base_link`
+- ROS 首版使用接收时刻作为 `header.stamp`，`stamp_ms` 先用于诊断和时序检查。
 
 单位转换：
 
@@ -287,15 +341,22 @@ euler_angle = cdeg * pi / (180 * 100)
 
 坐标约定：
 
-- ROS 右手系。
+- 使用 ROS 右手系。
 - x 向前。
 - y 向左。
 - z 向上。
 - yaw 绕 z 轴，逆时针为正。
 
-#### `0x82 WHEEL_ODOM`
+样例帧：
 
-payload：
+```text
+# seq=0, 水平静止：ax=0, ay=0, az=1000mg, gyro=0, yaw/pitch/roll=0, stamp=1000ms
+AA 55 81 00 16 00 00 00 00 E8 03 00 00 00 00 00 00 00 00 00 00 00 00 E8 03 00 00 1D 51
+```
+
+### 4.6 STM -> ROS：`0x82 WHEEL_ODOM`
+
+payload，长度 24：
 
 ```text
 int32 x_mm
@@ -308,18 +369,16 @@ int16 right_mm_s
 uint32 stamp_ms
 ```
 
-字段说明：
-
-| 字段 | 单位 | 说明 |
-| --- | --- | --- |
-| `x_mm` | mm | STM 积分得到的 x |
-| `y_mm` | mm | STM 积分得到的 y |
-| `yaw_mrad` | mrad | STM 积分得到的 yaw |
-| `vx_mm_s` | mm/s | 当前车体线速度 |
-| `wz_mrad_s` | mrad/s | 当前车体角速度 |
-| `left_mm_s` | mm/s | 左轮速度 |
-| `right_mm_s` | mm/s | 右轮速度 |
-| `stamp_ms` | ms | STM 侧毫秒时间戳 |
+| 字段 | 单位 | 正方向 | 说明 |
+| --- | --- | --- | --- |
+| `x_mm` | mm | 前进为正 | STM 积分得到的 x |
+| `y_mm` | mm | 左侧为正 | STM 积分得到的 y |
+| `yaw_mrad` | mrad | 逆时针为正 | STM 积分得到的 yaw |
+| `vx_mm_s` | mm/s | 前进为正 | 当前车体线速度 |
+| `wz_mrad_s` | mrad/s | 逆时针为正 | 当前车体角速度 |
+| `left_mm_s` | mm/s | 前进为正 | 左轮线速度 |
+| `right_mm_s` | mm/s | 前进为正 | 右轮线速度 |
+| `stamp_ms` | ms | 单调递增 | STM 上电后的毫秒时间戳 |
 
 ROS 发布：
 
@@ -327,12 +386,18 @@ ROS 发布：
 - 类型：`nav_msgs/msg/Odometry`
 - `header.frame_id = odom`
 - `child_frame_id = base_link`
+- 首版只发布消息，不发布 `odom -> base_link` TF，避免和 Cartographer 冲突。
 
-首版只发布消息，不发布 TF。
+样例帧：
 
-#### `0x83 STATUS`
+```text
+# seq=0, 全零里程计，stamp=1000ms
+AA 55 82 00 18 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 E8 03 00 00 38 45
+```
 
-payload：
+### 4.7 STM -> ROS：`0x83 STATUS`
+
+payload，长度 11：
 
 ```text
 uint16 voltage_mv
@@ -342,22 +407,20 @@ uint16 error_flags
 uint32 stamp_ms
 ```
 
-字段说明：
-
 | 字段 | 单位 | 说明 |
 | --- | --- | --- |
 | `voltage_mv` | mV | 电池或母线电压 |
-| `current_ma` | mA | 当前电流，可选 |
+| `current_ma` | mA | 当前电流；没有电流采样时填 0 |
 | `state` | enum | STM 当前状态 |
 | `error_flags` | bitmask | 错误标志 |
-| `stamp_ms` | ms | STM 侧毫秒时间戳 |
+| `stamp_ms` | ms | STM 上电后的毫秒时间戳 |
 
 ROS 发布：
 
 - Topic：`/stm/status`
 - 类型：`diagnostic_msgs/msg/DiagnosticArray`
 
-建议 STM 状态枚举：
+状态枚举：
 
 | state | 含义 |
 | --- | --- |
@@ -367,7 +430,7 @@ ROS 发布：
 | 3 | ESTOP |
 | 4 | ERROR |
 
-建议错误位：
+错误位：
 
 | bit | 含义 |
 | --- | --- |
@@ -377,6 +440,23 @@ ROS 发布：
 | 3 | MOTOR_ERROR |
 | 4 | LOW_VOLTAGE |
 | 5 | CRC_ERROR |
+
+样例帧：
+
+```text
+# seq=0, voltage=12000mV, current=0mA, state=READY, error=0, stamp=1000ms
+AA 55 83 00 0B E0 2E 00 00 01 00 00 E8 03 00 00 85 A4
+```
+
+### 4.8 STM 侧首轮测试发送顺序
+
+为了先验证 ROS 串口桥，STM 可按以下顺序发送：
+
+1. 1 Hz 发送 `STATUS`，确认 ROS 能收到 `/stm/status`。
+2. 50 Hz 发送水平静止 `IMU`，确认 ROS 能收到 `/track2vision/imu/data_valid`。
+3. 20 Hz 发送全零 `WHEEL_ODOM`，确认 ROS 能收到 `/odom/wheel`。
+4. ROS 发布 `/cmd_vel` 后，STM 打印收到的 `CMD_VEL` 中的 `v_mm_s`、`w_mrad_s` 和 `enable`。
+5. 停止 ROS `/cmd_vel` 输入后，确认 STM 在 watchdog 时间内停车。
 
 ## 5. TF 与坐标系设计
 
@@ -626,15 +706,13 @@ ros2 topic echo /stm/status
 - 定点控制没有避障能力，只适合在已知、低速、安全环境中测试。
 - 实车第一次测试必须限速，并保证急停可用。
 
-## 11. 待确认问题
+## 11. 实机部署前待确认
 
-以下问题在真正写代码前需要确认：
+通信接口按第 4 节冻结为 v1.0。以下问题不再影响协议字段，只影响香橙派实机参数和标定：
 
-1. STM 实际串口波特率是否为 `115200`？
-2. STM 上传 IMU 的欧拉角顺序是否能按 `yaw, pitch, roll` 提供？
-3. STM 侧 IMU 坐标轴是否已经对齐 ROS 坐标系：x 前、y 左、z 上？
-4. 轮式里程计由 STM 积分上传，还是只上传左右轮速后由 ROS 积分？
-5. 小车底盘实际参数：轮距、轮径、编码器分辨率是否已经在 STM 内部配置完成？
-6. 雷达相对 `base_link` 的实际安装位姿是多少？
-7. 是否需要硬件急停状态通过 `STATUS.error_flags` 上传？
-
+1. 香橙派侧 STM 串口设备名，优先固定为 `/dev/wheeltec_controller`。
+2. STM 实际串口波特率；默认按 `115200`，若固件已固定为其他值，则 ROS 参数跟随修改。
+3. STM 侧 IMU 坐标轴是否已经对齐 ROS 坐标系：x 前、y 左、z 上。
+4. 小车底盘实际参数：轮距、轮径、编码器分辨率是否已经在 STM 内部配置完成。
+5. 雷达相对 `base_link` 的实际安装位姿。
+6. 硬件急停是否接入 STM，并通过 `STATUS.error_flags` 的 bit3 或新增错误位上报。

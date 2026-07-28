@@ -1,0 +1,90 @@
+# stm_bridge
+
+ROS2 与 STM32 底盘控制板的串口桥接包，协议见仓库根目录 `program.md` 的“STM 串口通信接口冻结版 v1.0”。
+
+## 构建
+
+```bash
+colcon build --packages-select stm_bridge --symlink-install
+source install/setup.bash
+```
+
+## 启动
+
+香橙派侧执行：
+
+```bash
+ros2 launch stm_bridge stm_bridge.launch.py port:=/dev/wheeltec_controller baudrate:=115200
+```
+
+如果还没有 udev 固定名，可临时传入实际串口：
+
+```bash
+ros2 launch stm_bridge stm_bridge.launch.py port:=/dev/ttyUSB0 baudrate:=115200
+```
+
+## ROS 接口
+
+订阅：
+
+```text
+/cmd_vel    geometry_msgs/msg/Twist
+```
+
+发布：
+
+```text
+/track2vision/imu/data_valid    sensor_msgs/msg/Imu
+/odom/wheel                     nav_msgs/msg/Odometry
+/stm/status                     diagnostic_msgs/msg/DiagnosticArray
+```
+
+## 首轮实测顺序
+
+1. STM 先 1 Hz 发送 `STATUS`。
+2. ROS 侧检查：
+
+```bash
+ros2 topic echo /stm/status
+```
+
+3. STM 再 50 Hz 发送 `IMU`。
+4. ROS 侧检查：
+
+```bash
+ros2 topic hz /track2vision/imu/data_valid
+ros2 topic echo /track2vision/imu/data_valid --once
+```
+
+5. STM 再 20 Hz 发送 `WHEEL_ODOM`。
+6. ROS 侧检查：
+
+```bash
+ros2 topic hz /odom/wheel
+ros2 topic echo /odom/wheel --once
+```
+
+7. 抬轮后测试 ROS 下发速度：
+
+```bash
+ros2 topic pub -r 5 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}, angular: {z: 0.0}}"
+```
+
+停止发布后，ROS 会在 300 ms 超时后下发 `enable=0` 的零速帧；STM 侧也应做独立通信 watchdog。
+
+## 样例帧
+
+```text
+# ROS -> STM, seq=0, v=0, w=0, enable=0
+AA 55 01 00 05 00 00 00 00 00 C1 99
+
+# ROS -> STM, seq=1, v=200mm/s, w=0, enable=1
+AA 55 01 01 05 C8 00 00 00 01 F1 49
+
+# STM -> ROS, seq=0, STATUS ready, 12V, stamp=1000ms
+AA 55 83 00 0B E0 2E 00 00 01 00 00 E8 03 00 00 85 A4
+
+# STM -> ROS, seq=0, IMU horizontal static, az=1000mg, stamp=1000ms
+AA 55 81 00 16 00 00 00 00 E8 03 00 00 00 00 00 00 00 00 00 00 00 00 E8 03 00 00 1D 51
+```
+
