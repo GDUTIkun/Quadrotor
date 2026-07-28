@@ -1,0 +1,43 @@
+# ROS / colcon / catkin build outputs
+build/
+devel/
+install/
+log/
+logs/
+
+# catkin_tools
+.catkin_tools/
+.catkin_workspace
+
+# isolated catkin builds
+devel_isolated/
+install_isolated/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ROS runtime / local files
+.ros/
+*.bag
+*.db3
+*.mcap
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
