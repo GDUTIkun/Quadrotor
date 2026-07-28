@@ -51,6 +51,40 @@ map -> odom -> base_link -> laser
 - `base_link -> laser` 由静态 TF 发布。
 - 小车首版不由 STM/ROS 桥发布 odom；`map -> odom -> base_link` 统一由 Cartographer 发布，避免 TF 或 odom 来源冲突。
 
+## 2.1 当前 map 实现方式
+
+当前建图方式是 Cartographer 2D 激光 + IMU 建图，数据链路如下：
+
+```text
+LSN10P lidar       -> /scan                         -> Cartographer
+STM IMU over UART  -> stm_bridge                    -> /track2vision/imu/data_valid -> Cartographer
+static TF launch   -> base_link -> laser            -> Cartographer 查找雷达外参
+Cartographer       -> map -> odom -> base_link      -> RViz/后续定点控制使用
+Cartographer       -> /map                          -> occupancy grid 地图显示
+```
+
+具体实现：
+
+- `lslidar_driver` 发布 `/scan`，`frame_id = laser`。
+- `stm_bridge` 解析 STM 上传的 `0x81 IMU` 帧，发布 `/track2vision/imu/data_valid`，`frame_id = base_link`。
+- `car_bringup/launch/mapping.launch.py` 使用 `tf2_ros/static_transform_publisher` 发布静态 TF：`base_link -> laser`。
+- `carto/my_laser_with_imu.launch.py` 启动 `cartographer_node`，将 Cartographer 的 `imu` remap 到 `/track2vision/imu/data_valid`，`scan` 保持使用 `/scan`。
+- `carto/my_laser_with_imu.lua` 配置 `TRAJECTORY_BUILDER_2D.use_imu_data = true`，并设置 `num_laser_scans = 1`。
+- `cartographer_occupancy_grid_node` 根据 Cartographer 子图发布 `/map`，默认分辨率 `0.05 m`。
+
+Cartographer frame 责任边界：
+
+- `map_frame = map`
+- `odom_frame = odom`
+- `tracking_frame = base_link`
+- `published_frame = base_link`
+- `provide_odom_frame = true`
+- `use_odometry = false`
+
+因此当前 map 的位姿来源不是 STM 轮式里程计，而是 Cartographer 使用 `/scan` 和 IMU 做 2D scan matching 后发布的 TF。STM 的职责是提供 IMU 和执行速度指令；小车首版不通过 STM 发布 `odom -> base_link`。
+
+`yaw + pi/2` 当前不参与建图链路。它只是参考原飞机 `track2vision` 工程时发现的 MAVROS 外部视觉坐标适配逻辑，小车是否需要该 yaw offset 待实车观察后决定。
+
 ## 3. 工程模块划分
 
 建议新增三个 ROS2 包：
@@ -509,7 +543,30 @@ base_link -> laser
 
 ## 6. 建图流程
 
-### 6.1 启动前检查
+### 6.1 香橙派依赖安装
+
+雷达驱动 `lslidar_driver` 构建依赖 `diagnostic_updater`。香橙派侧构建整车工作区前先确认该包已安装：
+
+```bash
+sudo apt update
+sudo apt install ros-jazzy-diagnostic-updater
+```
+
+当前实机补充：
+
+- `sudo` 密码是一个空格。
+- 若安装时报 `404 Not Found`，通常是 apt 本地索引和镜像仓库不同步。先执行 `sudo apt update` 后重试。
+- 如果 `apt update` 后仍然 404，临时切换 ROS2 apt 源或等待镜像同步，再安装 `ros-jazzy-diagnostic-updater`。
+- 不要在缺少该依赖时反复构建雷达驱动；先解决系统依赖。
+
+建议安装完成后构建：
+
+```bash
+colcon build --packages-up-to car_bringup --symlink-install
+source install/setup.bash
+```
+
+### 6.2 启动前检查
 
 检查串口：
 
@@ -538,7 +595,7 @@ ros2 topic echo /track2vision/imu/data_valid --once
 ros2 run tf2_ros tf2_echo base_link laser
 ```
 
-### 6.2 建图启动
+### 6.3 建图启动
 
 推荐统一启动：
 
@@ -553,7 +610,24 @@ ros2 launch car_bringup mapping.launch.py
 - 静态 TF。
 - Cartographer 建图。
 
-### 6.3 保存地图
+启动后的建图关系：
+
+- `stm_bridge_node` 只提供 `/track2vision/imu/data_valid` 和 `/stm/status`，默认不提供 `/odom/wheel`。
+- `base_link_to_laser_tf` 提供 `base_link -> laser`，用于让 Cartographer 将 `/scan` 从雷达坐标转换到车体坐标。
+- `cartographer_node` 消费 `/scan` 和 `/track2vision/imu/data_valid`，并发布 `map -> odom -> base_link`。
+- `cartographer_occupancy_grid_node` 发布 `/map`，用于 RViz 显示和保存地图前检查。
+
+建图启动后建议检查：
+
+```bash
+ros2 topic hz /scan
+ros2 topic hz /track2vision/imu/data_valid
+ros2 topic echo /map --once
+ros2 run tf2_ros tf2_echo base_link laser
+ros2 run tf2_ros tf2_echo map base_link
+```
+
+### 6.4 保存地图
 
 建图完成后保存 `.pbstream`：
 
