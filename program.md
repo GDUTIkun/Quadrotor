@@ -49,7 +49,7 @@ map -> odom -> base_link -> laser
 
 - `map -> odom -> base_link` 由 Cartographer 发布。
 - `base_link -> laser` 由静态 TF 发布。
-- STM 上传的轮式里程计首版只发布 `/odom/wheel`，不发布 `odom -> base_link` TF，避免和 Cartographer 冲突。
+- 小车首版不由 STM/ROS 桥发布 odom；`map -> odom -> base_link` 统一由 Cartographer 发布，避免 TF 或 odom 来源冲突。
 
 ## 3. 工程模块划分
 
@@ -73,7 +73,8 @@ car_ws/
 - 订阅 ROS 侧 `/cmd_vel`。
 - 周期性向 STM 下发底盘速度指令。
 - 解析 STM 上传帧。
-- 发布 IMU、轮式里程计和 STM 状态。
+- 发布 IMU 和 STM 状态。
+- 轮式里程计上行协议保留为调试/后续融合接口，首版 ROS 节点默认不发布 `/odom/wheel`。
 - 实现通信 watchdog，ROS 指令超时后自动下发零速。
 
 ROS 接口：
@@ -82,8 +83,8 @@ ROS 接口：
 | --- | --- | --- | --- |
 | 订阅 | `/cmd_vel` | `geometry_msgs/msg/Twist` | ROS 到 STM 的速度指令来源 |
 | 发布 | `/track2vision/imu/data_valid` | `sensor_msgs/msg/Imu` | Cartographer 使用的 IMU |
-| 发布 | `/odom/wheel` | `nav_msgs/msg/Odometry` | STM 轮式里程计，首版仅调试使用 |
 | 发布 | `/stm/status` | `diagnostic_msgs/msg/DiagnosticArray` | 电压、电流、状态机、错误码、通信统计 |
+| 预留 | `/odom/wheel` | `nav_msgs/msg/Odometry` | 默认关闭，仅调试或后续融合时启用 |
 
 默认参数：
 
@@ -94,8 +95,9 @@ ROS 接口：
 | `cmd_rate_hz` | `50.0` | 速度指令下发频率 |
 | `cmd_timeout_s` | `0.3` | `/cmd_vel` 超时时间 |
 | `base_frame_id` | `base_link` | IMU 与底盘 frame |
-| `odom_frame_id` | `odom` | 轮式里程计父 frame |
-| `publish_odom_tf` | `false` | 首版关闭，避免 TF 冲突 |
+| `publish_wheel_odom` | `false` | 是否发布 `/odom/wheel`，首版关闭 |
+| `publish_odom_tf` | `false` | 必须保持关闭，`odom -> base_link` 由 Cartographer 发布 |
+| `yaw_offset_rad` | `0.0` | 坐标修正预留；是否需要 `+pi/2` 待实车测试确认 |
 
 ### 3.2 `point_controller`
 
@@ -243,14 +245,14 @@ crc16_ibm("123456789") = 0xBB3D
 | --- | --- | --- | --- | --- |
 | `0x01` | ROS -> STM | `CMD_VEL` | 5 | 50 Hz |
 | `0x81` | STM -> ROS | `IMU` | 22 | 50-100 Hz |
-| `0x82` | STM -> ROS | `WHEEL_ODOM` | 24 | 20-50 Hz |
+| `0x82` | STM -> ROS | `WHEEL_ODOM` | 24 | 预留，默认不要求发送 |
 | `0x83` | STM -> ROS | `STATUS` | 11 | 1-10 Hz |
 
 首轮通信测试最低要求：
 
 - STM 至少发送 `0x83 STATUS`，用于确认串口、帧头、长度和 CRC。
 - 然后发送 `0x81 IMU`，用于启动 Cartographer 需要的 `/track2vision/imu/data_valid`。
-- `0x82 WHEEL_ODOM` 可以稍后再接，首版 Cartographer 不依赖它。
+- `0x82 WHEEL_ODOM` 是预留调试接口，首版不要求 STM 发送，ROS 默认不发布 `/odom/wheel`。
 
 ### 4.4 ROS -> STM：`0x01 CMD_VEL`
 
@@ -354,7 +356,9 @@ euler_angle = cdeg * pi / (180 * 100)
 AA 55 81 00 16 00 00 00 00 E8 03 00 00 00 00 00 00 00 00 00 00 00 00 E8 03 00 00 1D 51
 ```
 
-### 4.6 STM -> ROS：`0x82 WHEEL_ODOM`
+### 4.6 STM -> ROS：`0x82 WHEEL_ODOM`，预留接口
+
+小车首版不使用 STM 里程计参与建图或定位，也不让串口桥发布 odom。该消息仅作为调试或后续融合预留；未启用 `publish_wheel_odom` 时，ROS 侧即使收到该帧也不发布 `/odom/wheel`。
 
 payload，长度 24：
 
@@ -386,7 +390,9 @@ ROS 发布：
 - 类型：`nav_msgs/msg/Odometry`
 - `header.frame_id = odom`
 - `child_frame_id = base_link`
-- 首版只发布消息，不发布 `odom -> base_link` TF，避免和 Cartographer 冲突。
+- 默认不发布。
+- 即使后续打开 `/odom/wheel` 调试，也不发布 `odom -> base_link` TF。
+- 小车项目的 `map -> odom -> base_link` 统一由 Cartographer 发布。
 
 样例帧：
 
@@ -454,9 +460,9 @@ AA 55 83 00 0B E0 2E 00 00 01 00 00 E8 03 00 00 85 A4
 
 1. 1 Hz 发送 `STATUS`，确认 ROS 能收到 `/stm/status`。
 2. 50 Hz 发送水平静止 `IMU`，确认 ROS 能收到 `/track2vision/imu/data_valid`。
-3. 20 Hz 发送全零 `WHEEL_ODOM`，确认 ROS 能收到 `/odom/wheel`。
-4. ROS 发布 `/cmd_vel` 后，STM 打印收到的 `CMD_VEL` 中的 `v_mm_s`、`w_mrad_s` 和 `enable`。
-5. 停止 ROS `/cmd_vel` 输入后，确认 STM 在 watchdog 时间内停车。
+3. ROS 发布 `/cmd_vel` 后，STM 打印收到的 `CMD_VEL` 中的 `v_mm_s`、`w_mrad_s` 和 `enable`。
+4. 停止 ROS `/cmd_vel` 输入后，确认 STM 在 watchdog 时间内停车。
+5. 如需调试轮式里程计，再临时打开 `publish_wheel_odom` 并发送 `WHEEL_ODOM`。
 
 ## 5. TF 与坐标系设计
 
@@ -489,6 +495,17 @@ base_link -> laser
 | `laser_yaw` | `0.0` | 雷达 yaw |
 
 实际安装后需要按机械结构修改。
+
+### 5.3 坐标修正待测项
+
+参考原飞机 `track2vision` 工程时发现，飞机侧曾在从 Cartographer 姿态转换到 MAVROS 外部视觉时使用过 `yaw + pi/2`。该修正属于飞机/MAVROS 坐标适配逻辑，小车首版不默认启用。
+
+小车实测时按以下顺序确认：
+
+1. 不加 yaw offset，观察 Cartographer 中 `base_link` 朝向是否与车头一致。
+2. 给小车原地逆时针转动，确认 `base_link` yaw 是否按 ROS 右手系增大。
+3. 若发现车头方向与地图显示固定相差 90 度，再考虑设置 `yaw_offset_rad = pi/2`。
+4. 该修正只能加在明确需要坐标适配的位置，不能同时在 IMU、TF、控制器多处重复修正。
 
 ## 6. 建图流程
 
@@ -601,7 +618,8 @@ STM 只需要继续执行速度指令，不需要理解目标点。
 - 实现二进制帧打包和增量解析。
 - 实现 `/cmd_vel` 到 `CMD_VEL` 串口帧。
 - 实现 `IMU`、`WHEEL_ODOM`、`STATUS` 三类上行帧解析。
-- 发布 `/track2vision/imu/data_valid`、`/odom/wheel`、`/stm/status`。
+- 发布 `/track2vision/imu/data_valid` 和 `/stm/status`。
+- `WHEEL_ODOM` 解析逻辑作为预留接口；首版默认不发布 `/odom/wheel`。
 - 加入 ROS 侧 `/cmd_vel` watchdog。
 
 ### 阶段 3：实现 `point_controller`
@@ -657,7 +675,6 @@ STM 只需要继续执行速度指令，不需要理解目标点。
 ```bash
 ros2 topic hz /cmd_vel
 ros2 topic hz /track2vision/imu/data_valid
-ros2 topic hz /odom/wheel
 ros2 topic echo /stm/status
 ```
 
@@ -666,8 +683,8 @@ ros2 topic echo /stm/status
 - `/cmd_vel` 正常下发。
 - `/cmd_vel` 停止后 300 ms 内下发零速。
 - IMU frame 为 `base_link`。
-- `/odom/wheel` frame 为 `odom -> base_link`。
 - `/stm/status` 能显示错误码和通信统计。
+- 默认不存在 `/odom/wheel`，小车 odom/TF 由 Cartographer 发布。
 
 ### 9.3 Cartographer 测试
 
@@ -702,7 +719,8 @@ ros2 topic echo /stm/status
 - 雷达串口和 STM 串口必须用 udev 固定名称，不能依赖 `/dev/ttyACM0`。
 - STM 与 ROS 的坐标系必须完全一致，否则 Cartographer 和定点控制都会异常。
 - Cartographer 当前使用 IMU，IMU 的 `frame_id`、方向、单位必须正确。
-- 首版不应同时让 STM 轮式里程计和 Cartographer 发布同一条 `odom -> base_link` TF。
+- 小车首版不发布 STM 轮式 odom；`map -> odom -> base_link` 由 Cartographer 统一发布。
+- 原飞机工程中的 `yaw + pi/2` 是待实测项，不默认启用，避免未验证的坐标补偿污染 IMU、TF 或控制逻辑。
 - 定点控制没有避障能力，只适合在已知、低速、安全环境中测试。
 - 实车第一次测试必须限速，并保证急停可用。
 
@@ -715,4 +733,5 @@ ros2 topic echo /stm/status
 3. STM 侧 IMU 坐标轴是否已经对齐 ROS 坐标系：x 前、y 左、z 上。
 4. 小车底盘实际参数：轮距、轮径、编码器分辨率是否已经在 STM 内部配置完成。
 5. 雷达相对 `base_link` 的实际安装位姿。
-6. 硬件急停是否接入 STM，并通过 `STATUS.error_flags` 的 bit3 或新增错误位上报。
+6. 是否需要 `yaw_offset_rad = pi/2`，由后续实车观察 Cartographer 朝向后决定。
+7. 硬件急停是否接入 STM，并通过 `STATUS.error_flags` 的 bit3 或新增错误位上报。
