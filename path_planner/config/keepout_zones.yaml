@@ -1,0 +1,4 @@
+frame_id: map
+# Default is no known keepout zones. Add static, known obstacle areas here
+# after measuring them in the map frame.
+keepout_zones: []
