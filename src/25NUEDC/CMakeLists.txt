@@ -49,6 +49,7 @@ install(TARGETS
 
 install(PROGRAMS
   scripts/ground_station_gui.py
+  scripts/camera_display_gui.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
