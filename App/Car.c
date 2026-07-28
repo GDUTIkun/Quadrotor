@@ -141,7 +141,7 @@ void Control_Task(void* pv)
         float pwm_r = -PID_Velocity(&r_velocity_pid, v_target-rwheel_speed)- v_target*ff;
         PID_Clamp(pwm_l, PWM_MIN, PWM_MAX);//限幅
         PID_Clamp(pwm_r, PWM_MIN, PWM_MAX);
-        Set_Motor(pwm_l, pwm_r);//输入给电机
+//        Set_Motor(pwm_l, pwm_r);//输入给电机
 //        xTaskDelayUntil(&pxPreviousWakeTime, 10);
     }
 }

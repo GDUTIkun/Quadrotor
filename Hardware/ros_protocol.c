@@ -418,9 +418,9 @@ HAL_StatusTypeDef RosProtocol_SendImu(double ax_g,
     ros_put_i16(&payload[0], ros_double_to_i16(ax_g * 1000.0));
     ros_put_i16(&payload[2], ros_double_to_i16(ay_g * 1000.0));
     ros_put_i16(&payload[4], ros_double_to_i16(az_g * 1000.0));
-    ros_put_i16(&payload[6], ros_double_to_i16(gx_dps * 1000.0));
-    ros_put_i16(&payload[8], ros_double_to_i16(gy_dps * 1000.0));
-    ros_put_i16(&payload[10], ros_double_to_i16(gz_dps * 1000.0));
+    ros_put_i16(&payload[6], ros_double_to_i16(gx_dps * 100.0));
+    ros_put_i16(&payload[8], ros_double_to_i16(gy_dps * 100.0));
+    ros_put_i16(&payload[10], ros_double_to_i16(gz_dps * 100.0));
     ros_put_i16(&payload[12], ros_double_to_i16(ros_normalize_deg(yaw_deg) * 100.0));
     ros_put_i16(&payload[14], ros_double_to_i16(ros_normalize_deg(pitch_deg) * 100.0));
     ros_put_i16(&payload[16], ros_double_to_i16(ros_normalize_deg(roll_deg) * 100.0));

@@ -181,9 +181,14 @@ car_bringup/launch/localization_control.launch.py
 - Cartographer 纯定位。
 - `point_controller` 定点控制节点。
 
-## 4. STM 串口通信接口冻结版 v1.0
+## 4. STM 串口通信接口冻结版 v1.1
 
 本节作为 ROS 侧与 STM 侧的对接依据。STM 侧先按这里的帧格式发 `STATUS` 和 `IMU`，ROS 侧能解析并发布 topic 后，再联调 `CMD_VEL` 下发和轮式里程计。
+
+v1.1 相对 v1.0 的变更：
+
+- `IMU` 角速度字段由 `int16 mdps` 改为 `int16 cdeg/s`，避免 `int16 mdps` 只能表示约 `±0.572 rad/s` 导致角速度饱和。
+- `IMU` payload 长度和字段数量不变，仍为 22 字节；ROS 侧只需要同步修改角速度单位换算。
 
 ### 4.1 串口物理层
 
@@ -251,6 +256,25 @@ crc16_ibm("123456789") = 0xBB3D
 | `0x82` | STM -> ROS | `WHEEL_ODOM` | 24           | 预留，默认不要求发送 |
 | `0x83` | STM -> ROS | `STATUS`     | 11           | 1-10 Hz              |
 
+### 4.3.1 数值量程核查
+
+通信字段按当前小车需求核查如下：
+
+| 消息 | 字段 | 编码 | 可表示范围 | 结论 |
+| ---- | ---- | ---- | ---------- | ---- |
+| `CMD_VEL` | `v_mm_s` | `int16 mm/s` | 约 `±32.767 m/s` | 足够 |
+| `CMD_VEL` | `w_mrad_s` | `int16 mrad/s` | 约 `±32.767 rad/s` | 足够 |
+| `IMU` | `ax_mg/ay_mg/az_mg` | `int16 mg` | 约 `±32.767 g` | 足够 |
+| `IMU` | `gx_cdeg_s/gy_cdeg_s/gz_cdeg_s` | `int16 0.01 deg/s` | 约 `±327.67 deg/s`，即 `±5.72 rad/s` | 足够首版小车使用 |
+| `IMU` | `yaw_cdeg/pitch_cdeg/roll_cdeg` | `int16 0.01 deg` | 约 `±327.67 deg` | 角度发送前应归一化到 `[-180, 180] deg` |
+| `WHEEL_ODOM` | `x_mm/y_mm` | `int32 mm` | 约 `±2147 km` | 足够 |
+| `WHEEL_ODOM` | `yaw_mrad` | `int32 mrad` | 约 `±2.147e6 rad` | 足够 |
+| `WHEEL_ODOM` | `vx_mm_s/left_mm_s/right_mm_s` | `int16 mm/s` | 约 `±32.767 m/s` | 足够 |
+| `WHEEL_ODOM` | `wz_mrad_s` | `int16 mrad/s` | 约 `±32.767 rad/s` | 足够 |
+| `STATUS` | `voltage_mv` | `uint16 mV` | `0-65.535 V` | 足够 |
+| `STATUS` | `current_ma` | `int16 mA` | 约 `±32.767 A` | 首版够用；大电流电机可改 `int32 mA` |
+| 通用 | `stamp_ms` | `uint32 ms` | 约 `49.7 天` 回绕 | ROS 侧按无符号差值处理 |
+
 首轮通信测试最低要求：
 
 - STM 至少发送 `0x83 STATUS`，用于确认串口、帧头、长度和 CRC。
@@ -307,9 +331,9 @@ payload，长度 22：
 int16 ax_mg
 int16 ay_mg
 int16 az_mg
-int16 gx_mdps
-int16 gy_mdps
-int16 gz_mdps
+int16 gx_cdeg_s
+int16 gy_cdeg_s
+int16 gz_cdeg_s
 int16 yaw_cdeg
 int16 pitch_cdeg
 int16 roll_cdeg
@@ -321,9 +345,9 @@ uint32 stamp_ms
 | `ax_mg`      | mg       | x 轴线加速度                      |
 | `ay_mg`      | mg       | y 轴线加速度                      |
 | `az_mg`      | mg       | z 轴线加速度，水平静止约`+1000` |
-| `gx_mdps`    | mdps     | x 轴角速度                        |
-| `gy_mdps`    | mdps     | y 轴角速度                        |
-| `gz_mdps`    | mdps     | z 轴角速度                        |
+| `gx_cdeg_s`  | 0.01 deg/s | x 轴角速度                      |
+| `gy_cdeg_s`  | 0.01 deg/s | y 轴角速度                      |
+| `gz_cdeg_s`  | 0.01 deg/s | z 轴角速度                      |
 | `yaw_cdeg`   | 0.01 deg | yaw，绕 z 轴                      |
 | `pitch_cdeg` | 0.01 deg | pitch，绕 y 轴                    |
 | `roll_cdeg`  | 0.01 deg | roll，绕 x 轴                     |
@@ -340,9 +364,15 @@ ROS 发布：
 
 ```text
 linear_acceleration = mg * 9.80665 / 1000
-angular_velocity = mdps * pi / (180 * 1000)
+angular_velocity = cdeg_s * pi / (180 * 100)
 euler_angle = cdeg * pi / (180 * 100)
 ```
+
+量程约定：
+
+- `int16 gx_cdeg_s/gy_cdeg_s/gz_cdeg_s` 可表示约 `±327.67 deg/s`，即约 `±5.72 rad/s`。
+- 不使用 `int16 mdps` 表示 IMU 角速度；`int16 mdps` 只能表示约 `±32.767 deg/s`，会在 ROS 侧表现为约 `±0.572 rad/s` 饱和。
+- 若后续实测角速度仍超过 `±327.67 deg/s`，应升级 IMU payload 字段为 `int32 mdps` 或 `int32 cdeg_s`，不能只在 ROS 侧放大。
 
 坐标约定：
 
