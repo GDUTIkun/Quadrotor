@@ -32,6 +32,7 @@ static volatile RosCmdVel_t latest_cmd;
 static volatile uint8_t cmd_valid;
 static volatile uint8_t cmd_timeout_latched = 1u;
 static volatile uint16_t protocol_error_flags = ROS_ERROR_CMD_TIMEOUT;
+static volatile RosProtocolDebug_t protocol_debug;
 
 static int16_t ros_i16_from_le(const uint8_t *p)
 {
@@ -147,6 +148,7 @@ static void ros_handle_cmd_vel(uint8_t seq, const uint8_t *payload)
     latest_cmd.enable = cmd.enable;
     latest_cmd.seq = cmd.seq;
     latest_cmd.stamp_ms = cmd.stamp_ms;
+    protocol_debug.rx_cmd_vel_frames++;
     cmd_valid = 1u;
     cmd_timeout_latched = 0u;
     protocol_error_flags &= (uint16_t)~ROS_ERROR_CMD_TIMEOUT;
@@ -196,6 +198,9 @@ static void ros_parse_byte(uint8_t byte)
     uint16_t expected_crc;
     uint16_t received_crc;
 
+    protocol_debug.rx_bytes++;
+    protocol_debug.last_rx_ms = HAL_GetTick();
+
     switch (rx_state)
     {
     case RX_WAIT_HEADER0:
@@ -231,6 +236,7 @@ static void ros_parse_byte(uint8_t byte)
         rx_payload_index = 0u;
         if (rx_len > ROS_PROTO_MAX_PAYLOAD_LEN)
         {
+            protocol_debug.rx_len_errors++;
             ros_parser_reset();
         }
         else if (rx_len == 0u)
@@ -268,10 +274,15 @@ static void ros_parse_byte(uint8_t byte)
         received_crc = (uint16_t)rx_crc_low | ((uint16_t)byte << 8);
         if (received_crc == expected_crc)
         {
+            protocol_debug.rx_frames++;
+            protocol_debug.last_msg_id = rx_msg_id;
+            protocol_debug.last_seq = rx_seq;
+            protocol_debug.last_len = rx_len;
             ros_handle_frame(rx_msg_id, rx_seq, rx_payload, rx_len);
         }
         else
         {
+            protocol_debug.rx_crc_errors++;
             protocol_error_flags |= ROS_ERROR_CRC_ERROR;
         }
         ros_parser_reset();
@@ -291,6 +302,7 @@ void RosProtocol_Init(UART_HandleTypeDef *huart)
     cmd_valid = 0u;
     cmd_timeout_latched = 1u;
     protocol_error_flags = ROS_ERROR_CMD_TIMEOUT;
+    memset((void *)&protocol_debug, 0, sizeof(protocol_debug));
 
     if (ros_uart != 0)
     {
@@ -338,6 +350,24 @@ uint8_t RosProtocol_GetCmdVel(RosCmdVel_t *cmd)
     cmd->seq = latest_cmd.seq;
     cmd->stamp_ms = latest_cmd.stamp_ms;
     return 1u;
+}
+
+void RosProtocol_GetDebug(RosProtocolDebug_t *debug)
+{
+    if (debug == 0)
+    {
+        return;
+    }
+
+    debug->rx_bytes = protocol_debug.rx_bytes;
+    debug->rx_frames = protocol_debug.rx_frames;
+    debug->rx_cmd_vel_frames = protocol_debug.rx_cmd_vel_frames;
+    debug->rx_crc_errors = protocol_debug.rx_crc_errors;
+    debug->rx_len_errors = protocol_debug.rx_len_errors;
+    debug->last_msg_id = protocol_debug.last_msg_id;
+    debug->last_seq = protocol_debug.last_seq;
+    debug->last_len = protocol_debug.last_len;
+    debug->last_rx_ms = protocol_debug.last_rx_ms;
 }
 
 uint32_t RosProtocol_GetLastCmdMs(void)

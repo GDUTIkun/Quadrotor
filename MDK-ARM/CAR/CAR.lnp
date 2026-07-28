@@ -42,6 +42,7 @@
 "car\jy901s.o"
 "car\myi2c.o"
 "car\control.o"
+"car\ros_protocol.o"
 "car\encoder.o"
 "car\pid.o"
 "car\position.o"

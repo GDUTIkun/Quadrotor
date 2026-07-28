@@ -10,8 +10,8 @@
 #include "position.h"
 #include "ros_protocol.h"
 
-#define PWM_MAX 4900
-#define PWM_MIN -4900
+#define PWM_MAX 900
+#define PWM_MIN -900
 
 
 void Car_Init(void);

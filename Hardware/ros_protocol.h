@@ -39,11 +39,25 @@ typedef struct
     uint32_t stamp_ms;
 } RosCmdVel_t;
 
+typedef struct
+{
+    uint32_t rx_bytes;
+    uint32_t rx_frames;
+    uint32_t rx_cmd_vel_frames;
+    uint32_t rx_crc_errors;
+    uint32_t rx_len_errors;
+    uint8_t last_msg_id;
+    uint8_t last_seq;
+    uint8_t last_len;
+    uint32_t last_rx_ms;
+} RosProtocolDebug_t;
+
 void RosProtocol_Init(UART_HandleTypeDef *huart);
 void RosProtocol_Poll(uint32_t now_ms);
 void RosProtocol_RxCpltCallback(UART_HandleTypeDef *huart);
 
 uint8_t RosProtocol_GetCmdVel(RosCmdVel_t *cmd);
+void RosProtocol_GetDebug(RosProtocolDebug_t *debug);
 uint32_t RosProtocol_GetLastCmdMs(void);
 uint16_t RosProtocol_GetErrorFlags(void);
 void RosProtocol_ClearErrorFlags(uint16_t flags);

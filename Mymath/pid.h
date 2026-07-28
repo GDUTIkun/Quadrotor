@@ -24,8 +24,9 @@ float PID_Gyro(PID_ControllerTypeDef *pid, float gyro);
 //float PID_Turn(PID_ControllerTypeDef *pid, float yaw);
 //float PID_Compute(PID_ControllerTypeDef *pid, float measurement);
 
-extern PID_ControllerTypeDef velocity_pid;
-extern PID_ControllerTypeDef gyro_pid;
+extern PID_ControllerTypeDef l_velocity_pid;
+extern PID_ControllerTypeDef r_velocity_pid;
+//extern PID_ControllerTypeDef gyro_pid;
 //extern PID_ControllerTypeDef turn_pid;
 //extern PID_ControllerTypeDef position_pid;
     

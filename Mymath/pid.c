@@ -1,7 +1,8 @@
 #include "pid.h"
 
 
-PID_ControllerTypeDef velocity_pid;
+PID_ControllerTypeDef l_velocity_pid;
+PID_ControllerTypeDef r_velocity_pid;
 PID_ControllerTypeDef gyro_pid;
 PID_ControllerTypeDef turn_pid;
 PID_ControllerTypeDef position_pid;
