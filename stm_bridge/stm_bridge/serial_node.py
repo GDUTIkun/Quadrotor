@@ -80,6 +80,7 @@ class StmBridgeNode(Node):
         self.declare_parameter('cmd_timeout_s', 0.3)
         self.declare_parameter('base_frame_id', 'base_link')
         self.declare_parameter('odom_frame_id', 'odom')
+        self.declare_parameter('publish_wheel_odom', False)
         self.declare_parameter('publish_odom_tf', False)
 
         self.port = self.get_parameter('port').value
@@ -88,6 +89,7 @@ class StmBridgeNode(Node):
         self.cmd_timeout_s = float(self.get_parameter('cmd_timeout_s').value)
         self.base_frame_id = self.get_parameter('base_frame_id').value
         self.odom_frame_id = self.get_parameter('odom_frame_id').value
+        self.publish_wheel_odom_enabled = as_bool(self.get_parameter('publish_wheel_odom').value)
         self.publish_odom_tf = as_bool(self.get_parameter('publish_odom_tf').value)
 
         self.parser = FrameParser()
@@ -102,10 +104,16 @@ class StmBridgeNode(Node):
 
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.on_cmd_vel, 10)
         self.imu_pub = self.create_publisher(Imu, '/track2vision/imu/data_valid', 20)
-        self.odom_pub = self.create_publisher(Odometry, '/odom/wheel', 20)
+        self.odom_pub = (
+            self.create_publisher(Odometry, '/odom/wheel', 20)
+            if self.publish_wheel_odom_enabled
+            else None
+        )
         self.status_pub = self.create_publisher(DiagnosticArray, '/stm/status', 10)
         self.tf_broadcaster: Optional[TransformBroadcaster] = (
-            TransformBroadcaster(self) if self.publish_odom_tf else None
+            TransformBroadcaster(self)
+            if self.publish_wheel_odom_enabled and self.publish_odom_tf
+            else None
         )
 
         self.open_serial()
@@ -229,6 +237,9 @@ class StmBridgeNode(Node):
         self.imu_pub.publish(msg)
 
     def publish_wheel_odom(self, payload: bytes) -> None:
+        if not self.publish_wheel_odom_enabled or self.odom_pub is None:
+            return
+
         data = decode_wheel_odom(payload)
         yaw = data.yaw_mrad / 1000.0
         q = yaw_to_quaternion(yaw)

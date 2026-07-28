@@ -57,9 +57,16 @@ PYTHONPATH=car/stm_bridge python3 -m stm_bridge.uart_loopback_test
 
 ```text
 /track2vision/imu/data_valid    sensor_msgs/msg/Imu
-/odom/wheel                     nav_msgs/msg/Odometry
 /stm/status                     diagnostic_msgs/msg/DiagnosticArray
 ```
+
+预留调试接口，默认关闭：
+
+```text
+/odom/wheel                     nav_msgs/msg/Odometry
+```
+
+小车首版的 `map -> odom -> base_link` 由 Cartographer 发布，`stm_bridge` 默认不发布 wheel odom，也不发布 `odom -> base_link` TF。
 
 ## 首轮实测顺序
 
@@ -78,21 +85,19 @@ ros2 topic hz /track2vision/imu/data_valid
 ros2 topic echo /track2vision/imu/data_valid --once
 ```
 
-5. STM 再 20 Hz 发送 `WHEEL_ODOM`。
-6. ROS 侧检查：
-
-```bash
-ros2 topic hz /odom/wheel
-ros2 topic echo /odom/wheel --once
-```
-
-7. 抬轮后测试 ROS 下发速度：
+5. 抬轮后测试 ROS 下发速度：
 
 ```bash
 ros2 topic pub -r 5 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}, angular: {z: 0.0}}"
 ```
 
 停止发布后，ROS 会在 300 ms 超时后下发 `enable=0` 的零速帧；STM 侧也应做独立通信 watchdog。
+
+如需临时看 STM 上报的轮式里程计，再显式打开：
+
+```bash
+ros2 launch stm_bridge stm_bridge.launch.py publish_wheel_odom:=true
+```
 
 ## 样例帧
 
