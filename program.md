@@ -90,8 +90,8 @@ ROS 接口：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `port` | `/dev/wheeltec_controller` | STM 串口设备 |
-| `baudrate` | `115200` | 串口波特率 |
+| `port` | `/dev/ttyS0` | STM 串口设备，UART0_M2 |
+| `baudrate` | `576000` | 串口波特率 |
 | `cmd_rate_hz` | `50.0` | 速度指令下发频率 |
 | `cmd_timeout_s` | `0.3` | `/cmd_vel` 超时时间 |
 | `base_frame_id` | `base_link` | IMU 与底盘 frame |
@@ -186,16 +186,16 @@ car_bringup/launch/localization_control.launch.py
 
 | 项 | 约定 |
 | --- | --- |
-| 波特率 | `115200` |
+| 波特率 | `576000` |
 | 数据位 | 8 |
 | 校验位 | none |
 | 停止位 | 1 |
 | 流控 | none |
 | 字节序 | little-endian |
 | 有符号数 | 二进制补码 |
-| ROS 默认设备 | `/dev/wheeltec_controller` |
+| ROS 默认设备 | `/dev/ttyS0` |
 
-如果 STM 侧现有波特率不是 `115200`，优先把 ROS 参数改成 STM 当前值，不强制 STM 先改固件。
+香橙派侧使用 UART0_M2：Pin 8 TX(GPIO4_A3)、Pin 10 RX(GPIO4_A4)。
 
 ### 4.2 通用帧格式
 
@@ -515,7 +515,7 @@ base_link -> laser
 
 ```bash
 ls -l /dev/wheeltec_lidar
-ls -l /dev/wheeltec_controller
+ls -l /dev/ttyS0
 ```
 
 检查雷达：
@@ -641,7 +641,7 @@ STM 只需要继续执行速度指令，不需要理解目标点。
 - 增加 `localization_control.launch.py`。
 - 在 launch 中发布 `base_link -> laser` 静态 TF。
 - 将雷达串口参数固定为 `/dev/wheeltec_lidar`。
-- 将 STM 串口参数固定为 `/dev/wheeltec_controller`。
+- 将 STM 串口参数固定为 UART0_M2：`/dev/ttyS0`、`576000`。
 
 ### 阶段 5：联调
 
@@ -728,8 +728,8 @@ ros2 topic echo /stm/status
 
 通信接口按第 4 节冻结为 v1.0。以下问题不再影响协议字段，只影响香橙派实机参数和标定：
 
-1. 香橙派侧 STM 串口设备名，优先固定为 `/dev/wheeltec_controller`。
-2. STM 实际串口波特率；默认按 `115200`，若固件已固定为其他值，则 ROS 参数跟随修改。
+1. 香橙派侧 STM 串口设备名已确定为 UART0_M2：`/dev/ttyS0`。
+2. STM 实际串口波特率已确定为 `576000`。
 3. STM 侧 IMU 坐标轴是否已经对齐 ROS 坐标系：x 前、y 左、z 上。
 4. 小车底盘实际参数：轮距、轮径、编码器分辨率是否已经在 STM 内部配置完成。
 5. 雷达相对 `base_link` 的实际安装位姿。

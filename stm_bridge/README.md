@@ -14,14 +14,36 @@ source install/setup.bash
 香橙派侧执行：
 
 ```bash
-ros2 launch stm_bridge stm_bridge.launch.py port:=/dev/wheeltec_controller baudrate:=115200
+ros2 launch stm_bridge stm_bridge.launch.py
 ```
 
-如果还没有 udev 固定名，可临时传入实际串口：
+当前默认使用 UART0_M2：
+
+```text
+/dev/ttyS0 @ 576000
+```
+
+如果以后加 udev 固定名，可临时覆盖实际串口：
 
 ```bash
-ros2 launch stm_bridge stm_bridge.launch.py port:=/dev/ttyUSB0 baudrate:=115200
+ros2 launch stm_bridge stm_bridge.launch.py port:=/dev/wheeltec_controller baudrate:=576000
 ```
+
+## UART0_M2 自发自收测试
+
+UART0_M2 使用 `/dev/ttyS0`，波特率 `576000`。短接 Pin 8 TX(GPIO4_A3) 与 Pin 10 RX(GPIO4_A4) 后执行：
+
+```bash
+ros2 run stm_bridge uart_loopback_test
+```
+
+没有构建安装时，可直接从源码运行：
+
+```bash
+PYTHONPATH=car/stm_bridge python3 -m stm_bridge.uart_loopback_test
+```
+
+脚本会先测原始字节回环，再测一组 `CMD_VEL` 协议帧回环。通过时最后输出 `PASS`。
 
 ## ROS 接口
 
@@ -87,4 +109,3 @@ AA 55 83 00 0B E0 2E 00 00 01 00 00 E8 03 00 00 85 A4
 # STM -> ROS, seq=0, IMU horizontal static, az=1000mg, stamp=1000ms
 AA 55 81 00 16 00 00 00 00 E8 03 00 00 00 00 00 00 00 00 00 00 00 00 E8 03 00 00 1D 51
 ```
-

@@ -74,8 +74,8 @@ class StmBridgeNode(Node):
     def __init__(self) -> None:
         super().__init__('stm_bridge_node')
 
-        self.declare_parameter('port', '/dev/wheeltec_controller')
-        self.declare_parameter('baudrate', 115200)
+        self.declare_parameter('port', '/dev/ttyS0')
+        self.declare_parameter('baudrate', 576000)
         self.declare_parameter('cmd_rate_hz', 50.0)
         self.declare_parameter('cmd_timeout_s', 0.3)
         self.declare_parameter('base_frame_id', 'base_link')
@@ -295,7 +295,8 @@ def main(args=None) -> None:
     finally:
         node.close_serial()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

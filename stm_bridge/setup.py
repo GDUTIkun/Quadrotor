@@ -22,6 +22,7 @@ setup(
     entry_points={
         'console_scripts': [
             'stm_bridge_node = stm_bridge.serial_node:main',
+            'uart_loopback_test = stm_bridge.uart_loopback_test:main',
         ],
     },
 )
