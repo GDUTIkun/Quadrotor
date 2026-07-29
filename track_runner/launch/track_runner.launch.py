@@ -6,10 +6,10 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('straight_length_m', default_value='1.45'),
+        DeclareLaunchArgument('straight_length_m', default_value='1.42'),
         DeclareLaunchArgument('radius_m', default_value='0.75'),
         DeclareLaunchArgument('path_spacing_m', default_value='0.02'),
-        DeclareLaunchArgument('default_speed_m_s', default_value='0.01'),
+        DeclareLaunchArgument('default_speed_m_s', default_value='0.02'),
         DeclareLaunchArgument('default_laps', default_value='1'),
         DeclareLaunchArgument('lookahead_distance_m', default_value='0.20'),
         DeclareLaunchArgument('waypoint_tolerance_m', default_value='0.05'),
