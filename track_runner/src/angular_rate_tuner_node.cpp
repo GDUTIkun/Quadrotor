@@ -104,9 +104,12 @@ private:
     const auto command = lower_copy(msg->data);
     if (command == "start") {
       running_ = true;
+      status_reason_ = odom_is_fresh() ? "running" : "waiting_odom";
       RCLCPP_INFO(get_logger(), "Angular rate tuner started");
     } else if (command == "stop" || command == "pause") {
       running_ = false;
+      last_w_error_ = 0.0;
+      status_reason_ = "idle";
       publish_stop();
       RCLCPP_INFO(get_logger(), "Angular rate tuner stopped");
     } else if (command == "reverse") {
@@ -145,6 +148,7 @@ private:
       if (publish_when_idle_) {
         publish_stop();
       }
+      status_reason_ = "idle";
       publish_status_throttled();
       return;
     }

@@ -287,15 +287,17 @@ class StraightLineRecorder(Node):
         progress = self.latest_status.get("progress_m")
         yaw_error = self.latest_status.get("yaw_error_rad")
         cmd_w = self.latest_cmd["angular_z"] if self.latest_cmd else None
+        progress_text = "-" if progress is None else f"{progress:.3f}"
+        yaw_error_text = "-" if yaw_error is None else f"{yaw_error:.3f}"
+        cmd_w_text = "-" if cmd_w is None else f"{cmd_w:.3f}"
         self.get_logger().info(
-            "recording %s | /cmd_vel pub=%d sub=%d | state=%s progress=%s yaw_error=%s cmd_w=%s",
-            self.output_path,
-            cmd_publishers,
-            cmd_subscribers,
-            state or "-",
-            "-" if progress is None else f"{progress:.3f}",
-            "-" if yaw_error is None else f"{yaw_error:.3f}",
-            "-" if cmd_w is None else f"{cmd_w:.3f}",
+            "recording "
+            f"{self.output_path} | "
+            f"/cmd_vel pub={cmd_publishers} sub={cmd_subscribers} | "
+            f"state={state or '-'} "
+            f"progress={progress_text} "
+            f"yaw_error={yaw_error_text} "
+            f"cmd_w={cmd_w_text}"
         )
 
     def close(self):
