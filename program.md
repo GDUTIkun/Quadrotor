@@ -268,6 +268,106 @@ car_pose.yaw = cartographer_yaw + pi/2 + yaw_offset_rad
 | `publish_rate_hz` | `20.0` | 坐标发布频率 |
 | `yaw_offset_rad` | `0.0` | 实车确认后的额外 yaw 修正，默认不开 |
 
+### 3.5 `track_runner`
+
+职责：
+
+- 比赛固定航线跟踪节点，使用 `/car/pose` 闭环计算速度指令。
+- 按操场形赛道生成路径点，并根据当前位置和前瞻目标点实时输出 `/cmd_vel`。
+- 通过 topic 在终端或飞机任务逻辑中控制速度、圈数、启动、暂停和停止。
+- 当前 `/car/pose` 由 `car_localization` 从 Cartographer TF 转换得到，坐标约定为 `+x` 向右、`+y` 向前、`+z` 向上。
+
+赛道几何：
+
+```text
+A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
+半径 r=0.75 m
+顺序 A -> B -> C -> D -> A
+```
+
+以上是局部赛道坐标。默认 `use_start_pose_as_origin=true`，收到 `start` 时会把当前 `/car/pose` 位置锁定为 A 点原点，因此不要求地图中的 A 点绝对坐标正好是 `(0,0)`。小车初始由人工摆在 A 点，车头朝 A->B。默认顺时针执行：
+
+| 段 | 几何 | 路径方向 |
+| --- | --- | --- |
+| A->B | 左侧直线 `1.5 m` | `+y` |
+| B->C | 上半圆，半径 `0.75 m` | 向右半圆 |
+| C->D | 右侧直线 `1.5 m` | `-y` |
+| D->A | 下半圆，半径 `0.75 m` | 向左半圆 |
+
+一圈长度：
+
+```text
+2 * 1.5 + 2 * pi * 0.75 ~= 7.71 m
+```
+
+`0.02 m/s` 跑一圈约 `386 s`。若只做快速底盘验证，建议先用 `0.05-0.08 m/s` 抬轮或低速空场测试。
+
+控制方式：
+
+- 节点订阅 `/car/pose` 获取当前 `x/y/yaw`。
+- 赛道离散为固定路径点，默认点距 `0.03 m`。
+- 控制循环中查找当前最近路径进度，并选取前方 `lookahead_distance_m` 的目标点。
+- 根据当前车头方向和目标点方向计算 `yaw_error`。
+- 输出 `linear.x=speed`，`angular.z=clamp(k_w * yaw_error, -w_max_rad_s, w_max_rad_s)`。
+- 当累计路径进度达到目标圈数后自动停车。
+
+ROS 接口：
+
+| 方向 | Topic | 类型 | 说明 |
+| --- | --- | --- | --- |
+| 订阅 | `/car/pose` | `geometry_msgs/msg/PoseStamped` | 闭环跟踪使用的当前位姿，坐标为右/前/上 |
+| 订阅 | `/car/track_runner/command` | `std_msgs/msg/String` | `start`、`pause`、`resume`、`stop`、`reset` |
+| 订阅 | `/car/track_runner/speed` | `std_msgs/msg/Float64` | 运行速度，单位 `m/s` |
+| 订阅 | `/car/track_runner/laps` | `std_msgs/msg/Int32` | 目标圈数，最小为 1 |
+| 发布 | `/cmd_vel` | `geometry_msgs/msg/Twist` | 下发到底盘的开环速度 |
+| 发布 | `/car/track_runner/status` | `std_msgs/msg/String` | 当前状态、圈数、赛段、速度、剩余距离 |
+
+默认参数：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `straight_length_m` | `1.5` | 直线段长度 |
+| `radius_m` | `0.75` | 半圆半径 |
+| `path_spacing_m` | `0.03` | 航线路径点间距 |
+| `default_speed_m_s` | `0.02` | 默认线速度 |
+| `default_laps` | `1` | 默认圈数 |
+| `lookahead_distance_m` | `0.25` | 前瞻目标点距离 |
+| `waypoint_tolerance_m` | `0.08` | 路径进度更新容差 |
+| `goal_tolerance_m` | `0.10` | 终点停车容差 |
+| `k_w` | `1.8` | 航向误差到角速度的比例系数 |
+| `w_max_rad_s` | `0.6` | 最大角速度 |
+| `pose_timeout_s` | `0.5` | `/car/pose` 超时时间，超时停车 |
+| `use_start_pose_as_origin` | `true` | `start` 时用当前 `/car/pose` 作为 A 点 |
+| `control_rate_hz` | `50.0` | `/cmd_vel` 发布频率 |
+| `pose_topic` | `/car/pose` | 当前位姿 topic |
+| `cmd_vel_topic` | `/cmd_vel` | 输出给 STM 的速度 topic |
+
+启动方式：
+
+```bash
+cd ~/flight_ws/car
+source install/setup.bash
+ros2 launch track_runner track_runner.launch.py
+```
+
+终端控制：
+
+```bash
+ros2 topic pub --once /car/track_runner/speed std_msgs/msg/Float64 "{data: 0.02}"
+ros2 topic pub --once /car/track_runner/laps std_msgs/msg/Int32 "{data: 1}"
+ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: start}"
+ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: pause}"
+ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: resume}"
+ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: stop}"
+```
+
+使用注意：
+
+- 航线跟踪时必须确保 `/cmd_vel` 只有一个 publisher。
+- 不要同时启动 `path_controller_node`，也不要同时手动 `ros2 topic pub /cmd_vel`。
+- `pause`、`stop`、`reset` 都会持续发布零速，避免 STM watchdog 触发时出现忽动忽停。
+- 如果 `/car/pose` 超过 `pose_timeout_s` 未更新，节点会发布零速并在状态中显示 `reason=pose_unavailable`。
+
 ## 4. STM 串口通信接口冻结版 v1.1
 
 本节作为 ROS 侧与 STM 侧的对接依据。STM 侧先按这里的帧格式发 `STATUS` 和 `IMU`，ROS 侧能解析并发布 topic 后，再联调 `CMD_VEL` 下发和轮式里程计。
