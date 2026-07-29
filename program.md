@@ -305,11 +305,32 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
 控制方式：
 
 - 节点订阅 `/car/pose` 获取当前 `x/y/yaw`。
-- 赛道离散为固定路径点，默认点距 `0.03 m`。
+- 赛道离散为固定路径点，默认点距 `0.02 m`。
 - 控制循环中查找当前最近路径进度，并选取前方 `lookahead_distance_m` 的目标点。
-- 根据当前车头方向和目标点方向计算 `yaw_error`。
+- 根据当前车头方向和目标点方向计算 `yaw_error`：
+
+  ```text
+  target_yaw = atan2(target.y - pose.y, target.x - pose.x)
+  yaw_error  = normalize(target_yaw - pose.yaw)
+  ```
+
 - 输出 `linear.x=speed`，`angular.z=clamp(k_w * yaw_error, -w_max_rad_s, w_max_rad_s)`。
 - 当累计路径进度达到目标圈数后自动停车。
+
+角度追踪链路：
+
+```text
+/car/pose
+  -> 当前 x/y/yaw
+  -> 当前路径进度 progress
+  -> 前瞻目标点 target
+  -> yaw_error
+  -> angular.z = k_w * yaw_error
+  -> stm_bridge
+  -> STM 左右轮速度环
+```
+
+因此当前 ROS 侧是 `yaw` 角度闭环，不是角速度闭环。Cartographer/`/car/pose` 提供的是位姿和 yaw，当前 `track_runner` 没有用 yaw 差分估计实际角速度，也没有做角速度误差闭环。`angular.z` 是 ROS 侧给 STM 的期望角速度，底层角速度执行主要依赖 STM 对左右轮速度环的控制。
 
 ROS 接口：
 
@@ -319,8 +340,8 @@ ROS 接口：
 | 订阅 | `/car/track_runner/command` | `std_msgs/msg/String` | `start`、`pause`、`resume`、`stop`、`reset` |
 | 订阅 | `/car/track_runner/speed` | `std_msgs/msg/Float64` | 运行速度，单位 `m/s` |
 | 订阅 | `/car/track_runner/laps` | `std_msgs/msg/Int32` | 目标圈数，最小为 1 |
-| 发布 | `/cmd_vel` | `geometry_msgs/msg/Twist` | 下发到底盘的开环速度 |
-| 发布 | `/car/track_runner/status` | `std_msgs/msg/String` | 当前状态、圈数、赛段、速度、剩余距离 |
+| 发布 | `/cmd_vel` | `geometry_msgs/msg/Twist` | 下发到底盘的闭环速度指令 |
+| 发布 | `/car/track_runner/status` | `std_msgs/msg/String` | 当前状态、圈数、路径进度、目标点、yaw 误差、速度、剩余距离 |
 
 默认参数：
 
@@ -328,14 +349,14 @@ ROS 接口：
 | --- | --- | --- |
 | `straight_length_m` | `1.5` | 直线段长度 |
 | `radius_m` | `0.75` | 半圆半径 |
-| `path_spacing_m` | `0.03` | 航线路径点间距 |
-| `default_speed_m_s` | `0.02` | 默认线速度 |
+| `path_spacing_m` | `0.02` | 航线路径点间距 |
+| `default_speed_m_s` | `0.01` | 默认线速度 |
 | `default_laps` | `1` | 默认圈数 |
 | `lookahead_distance_m` | `0.25` | 前瞻目标点距离 |
-| `waypoint_tolerance_m` | `0.08` | 路径进度更新容差 |
-| `goal_tolerance_m` | `0.10` | 终点停车容差 |
-| `k_w` | `1.8` | 航向误差到角速度的比例系数 |
-| `w_max_rad_s` | `0.6` | 最大角速度 |
+| `waypoint_tolerance_m` | `0.05` | 路径进度更新容差 |
+| `goal_tolerance_m` | `0.05` | 终点停车容差 |
+| `k_w` | `0.6` | 航向误差到角速度的比例系数 |
+| `w_max_rad_s` | `0.3` | 最大角速度 |
 | `pose_timeout_s` | `0.5` | `/car/pose` 超时时间，超时停车 |
 | `use_start_pose_as_origin` | `true` | `start` 时用当前 `/car/pose` 作为 A 点 |
 | `control_rate_hz` | `50.0` | `/cmd_vel` 发布频率 |
@@ -367,6 +388,9 @@ ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: stop
 - 不要同时启动 `path_controller_node`，也不要同时手动 `ros2 topic pub /cmd_vel`。
 - `pause`、`stop`、`reset` 都会持续发布零速，避免 STM watchdog 触发时出现忽动忽停。
 - 如果 `/car/pose` 超过 `pose_timeout_s` 未更新，节点会发布零速并在状态中显示 `reason=pose_unavailable`。
+- 若直线段左右摆动，优先增大 `lookahead_distance_m` 或减小 `k_w`。
+- 若圆弧段转向跟不上，优先增大 `k_w` 或 `w_max_rad_s`。
+- 若目标点过近导致轨迹像折线，避免把 `lookahead_distance_m` 调到接近 `path_spacing_m`，建议从 `0.25 m` 起调。
 
 ## 4. STM 串口通信接口冻结版 v1.1
 

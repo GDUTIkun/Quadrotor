@@ -165,7 +165,7 @@ private:
     append_line(
       Point{origin_x_, origin_y_},
       Point{origin_x_, origin_y_ + straight_length_m_});
-    append_arc(Point{origin_x_ + radius_m_, origin_y_ + straight_length_m_}, M_PI, 0.0);
+    append_arc(Point{origin_x_ + radius_m_, origin_y_ + straight_length_m_}, M_PI, -M_PI);
     append_line(
       Point{origin_x_ + 2.0 * radius_m_, origin_y_ + straight_length_m_},
       Point{origin_x_ + 2.0 * radius_m_, origin_y_});
