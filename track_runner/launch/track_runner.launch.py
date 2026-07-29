@@ -6,17 +6,17 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('straight_length_m', default_value='1.42'),
+        DeclareLaunchArgument('straight_length_m', default_value='1.35'),
         DeclareLaunchArgument('radius_m', default_value='0.75'),
         DeclareLaunchArgument('path_spacing_m', default_value='0.02'),
-        DeclareLaunchArgument('default_speed_m_s', default_value='0.02'),
+        DeclareLaunchArgument('default_speed_m_s', default_value='0.025'),
         DeclareLaunchArgument('default_laps', default_value='1'),
         DeclareLaunchArgument('lookahead_distance_m', default_value='0.20'),
         DeclareLaunchArgument('waypoint_tolerance_m', default_value='0.05'),
         DeclareLaunchArgument('goal_tolerance_m', default_value='0.05'),
         DeclareLaunchArgument('k_w', default_value='0.62'),
         DeclareLaunchArgument('k_w_ff_speed_intercept', default_value='5.0'),
-        DeclareLaunchArgument('k_w_ff_speed_slope', default_value='-100.0'),
+        DeclareLaunchArgument('k_w_ff_speed_slope', default_value='-45.0'),
         DeclareLaunchArgument('k_w_ff_min', default_value='0.0'),
         DeclareLaunchArgument('k_w_ff_max', default_value='10.0'),
         DeclareLaunchArgument('k_w_rate', default_value='0.37'),
