@@ -6,6 +6,7 @@
 - LSN10P 雷达驱动
 - `base_link -> laser` 静态 TF
 - Cartographer 建图
+- `/car/pose` 小车定位坐标发布
 
 香橙派侧启动：
 
@@ -30,4 +31,10 @@ base_link -> laser: x=0.055, y=0, z=0.015, roll=0, pitch=0, yaw=-1.5708
 
 ```bash
 ros2 launch car_bringup mapping.launch.py laser_x:=0.055 laser_z:=0.015 laser_yaw:=-1.5708
+```
+
+`/car/pose` 由 `car_localization` 从 Cartographer 的 `map -> base_link` TF 转换得到，默认坐标系为 `car_map`：
+
+```text
++x 向右，+y 向前，+z 向上
 ```

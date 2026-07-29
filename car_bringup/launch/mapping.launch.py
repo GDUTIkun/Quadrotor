@@ -12,9 +12,13 @@ def generate_launch_description():
     start_lidar = LaunchConfiguration('start_lidar')
     start_stm = LaunchConfiguration('start_stm')
     start_carto = LaunchConfiguration('start_carto')
+    start_pose_publisher = LaunchConfiguration('start_pose_publisher')
 
     stm_port = LaunchConfiguration('stm_port')
     stm_baudrate = LaunchConfiguration('stm_baudrate')
+    pose_topic = LaunchConfiguration('pose_topic')
+    pose_publish_rate_hz = LaunchConfiguration('pose_publish_rate_hz')
+    pose_yaw_offset_rad = LaunchConfiguration('pose_yaw_offset_rad')
 
     laser_x = LaunchConfiguration('laser_x')
     laser_y = LaunchConfiguration('laser_y')
@@ -77,11 +81,31 @@ def generate_launch_description():
         ],
     )
 
+    carto_pose_publisher_node = Node(
+        package='car_localization',
+        executable='carto_pose_publisher_node',
+        name='carto_pose_publisher_node',
+        output='screen',
+        condition=IfCondition(start_pose_publisher),
+        parameters=[{
+            'global_frame_id': 'map',
+            'base_frame_id': 'base_link',
+            'output_frame_id': 'car_map',
+            'pose_topic': pose_topic,
+            'publish_rate_hz': pose_publish_rate_hz,
+            'yaw_offset_rad': pose_yaw_offset_rad,
+        }],
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('start_lidar', default_value='true'),
         DeclareLaunchArgument('start_stm', default_value='true'),
         DeclareLaunchArgument('start_carto', default_value='true'),
+        DeclareLaunchArgument('start_pose_publisher', default_value='true'),
+        DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
+        DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
+        DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
         DeclareLaunchArgument('stm_port', default_value='/dev/ttyS0'),
         DeclareLaunchArgument('stm_baudrate', default_value='576000'),
         DeclareLaunchArgument('laser_x', default_value='0.055'),
@@ -94,4 +118,5 @@ def generate_launch_description():
         lidar_launch,
         base_to_laser_tf,
         carto_launch,
+        carto_pose_publisher_node,
     ])

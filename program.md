@@ -52,9 +52,44 @@ map -> odom -> base_link -> laser
 - `base_link -> laser` 由静态 TF 发布。
 - 小车首版不由 STM/ROS 桥发布 odom；`map -> odom -> base_link` 统一由 Cartographer 发布，避免 TF 或 odom 来源冲突。
 
+## 2.1 当前 map 实现方式
+
+当前建图方式是 Cartographer 2D 激光 + IMU 建图，数据链路如下：
+
+```text
+LSN10P lidar       -> /scan                         -> Cartographer
+STM IMU over UART  -> stm_bridge                    -> /track2vision/imu/data_valid -> Cartographer
+static TF launch   -> base_link -> laser            -> Cartographer 查找雷达外参
+Cartographer       -> map -> odom -> base_link      -> RViz/后续路径规划与控制使用
+Cartographer       -> /map                          -> occupancy grid 地图显示
+car_localization   -> /car/pose                     -> 对外发布右手 x/前 y/上 z 小车坐标
+```
+
+具体实现：
+
+- `lslidar_driver` 发布 `/scan`，`frame_id = laser`。
+- `stm_bridge` 解析 STM 上传的 `0x81 IMU` 帧，发布 `/track2vision/imu/data_valid`，`frame_id = base_link`。
+- `car_bringup/launch/mapping.launch.py` 使用 `tf2_ros/static_transform_publisher` 发布静态 TF：`base_link -> laser`。
+- `carto/my_laser_with_imu.launch.py` 启动 `cartographer_node`，将 Cartographer 的 `imu` remap 到 `/track2vision/imu/data_valid`，`scan` 保持使用 `/scan`。
+- `carto/my_laser_with_imu.lua` 配置 `TRAJECTORY_BUILDER_2D.use_imu_data = true`，并设置 `num_laser_scans = 1`。
+- `cartographer_occupancy_grid_node` 根据 Cartographer 子图发布 `/map`，默认分辨率 `0.05 m`。
+
+Cartographer frame 责任边界：
+
+- `map_frame = map`
+- `odom_frame = odom`
+- `tracking_frame = base_link`
+- `published_frame = base_link`
+- `provide_odom_frame = true`
+- `use_odometry = false`
+
+因此当前 map 的位姿来源不是 STM 轮式里程计，而是 Cartographer 使用 `/scan` 和 IMU 做 2D scan matching 后发布的 TF。STM 的职责是提供 IMU 和执行速度指令；小车首版不通过 STM 发布 `odom -> base_link`。
+
+`yaw + pi/2` 当前不参与建图链路。它只是参考原飞机 `track2vision` 工程时发现的 MAVROS 外部视觉坐标适配逻辑，小车是否需要该 yaw offset 待实车观察后决定。
+
 ## 3. 工程模块划分
 
-建议新增三个 ROS2 包：
+建议使用这些 ROS2 包：
 
 ```text
 car_ws/
@@ -62,6 +97,9 @@ car_ws/
   lsn10_lidar/
   stm_bridge/
   point_controller/
+  car_localization/
+  path_planner/
+  path_controller/
   car_bringup/
   program.md
 ```
@@ -156,6 +194,7 @@ ROS 接口：
 - 提供建图 launch。
 - 提供纯定位 + 定点控制 launch。
 - 发布 `base_link -> laser` 静态 TF。
+- 启动 `car_localization` 对外发布小车定位坐标。
 - 避免每次手动启动多个 launch。
 
 建议提供两个启动文件：
@@ -171,6 +210,7 @@ car_bringup/launch/localization_control.launch.py
 - STM 串口桥。
 - `base_link -> laser` 静态 TF。
 - Cartographer 建图。
+- `car_localization` 小车坐标发布节点。
 
 `localization_control.launch.py` 启动：
 
@@ -178,7 +218,43 @@ car_bringup/launch/localization_control.launch.py
 - STM 串口桥。
 - `base_link -> laser` 静态 TF。
 - Cartographer 纯定位。
-- `point_controller` 定点控制节点。
+- `car_localization` 小车坐标发布节点。
+- `path_planner` 静态禁入区路径规划节点。
+- `path_controller` 路径跟踪控制节点。
+
+### 3.4 `car_localization`
+
+职责：
+
+- 查询 Cartographer 发布的 `map -> base_link` TF。
+- 不发布 TF，不改变 Cartographer、路径规划器和控制器使用的 ROS 标准坐标。
+- 将 Cartographer 位姿额外转换成对外坐标 topic，坐标约定为 `+x` 向右、`+y` 向前、`+z` 向上。
+
+ROS 接口：
+
+| 方向 | Topic | 类型 | 说明 |
+| --- | --- | --- | --- |
+| 发布 | `/car/pose` | `geometry_msgs/msg/PoseStamped` | 小车在 `car_map` 坐标系下的位置和 yaw |
+
+坐标转换：
+
+```text
+car_pose.x = -cartographer_pose.y
+car_pose.y =  cartographer_pose.x
+car_pose.z =  cartographer_pose.z
+car_pose.yaw = cartographer_yaw + pi/2 + yaw_offset_rad
+```
+
+默认参数：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `global_frame_id` | `map` | Cartographer 全局 frame |
+| `base_frame_id` | `base_link` | 小车本体 frame |
+| `output_frame_id` | `car_map` | `/car/pose` 的 frame，轴定义为右/前/上 |
+| `pose_topic` | `/car/pose` | 对外发布的小车坐标 topic |
+| `publish_rate_hz` | `20.0` | 坐标发布频率 |
+| `yaw_offset_rad` | `0.0` | 实车确认后的额外 yaw 修正，默认不开 |
 
 ## 4. STM 串口通信接口冻结版 v1.1
 
@@ -506,6 +582,7 @@ AA 55 83 00 0B E0 2E 00 00 01 00 00 E8 03 00 00 85 A4
 | `odom`      | Cartographer 输出的局部连续坐标系 |
 | `base_link` | 小车本体坐标系                    |
 | `laser`     | 激光雷达坐标系                    |
+| `car_map` | 对外坐标发布 frame，`+x` 向右、`+y` 向前、`+z` 向上 |
 
 ### 5.2 静态 TF
 

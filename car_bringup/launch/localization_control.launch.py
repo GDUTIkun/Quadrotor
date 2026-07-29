@@ -13,9 +13,13 @@ def generate_launch_description():
     start_stm = LaunchConfiguration('start_stm')
     start_carto = LaunchConfiguration('start_carto')
     start_navigation = LaunchConfiguration('start_navigation')
+    start_pose_publisher = LaunchConfiguration('start_pose_publisher')
 
     load_state_filename = LaunchConfiguration('load_state_filename')
     obstacle_file = LaunchConfiguration('obstacle_file')
+    pose_topic = LaunchConfiguration('pose_topic')
+    pose_publish_rate_hz = LaunchConfiguration('pose_publish_rate_hz')
+    pose_yaw_offset_rad = LaunchConfiguration('pose_yaw_offset_rad')
 
     stm_port = LaunchConfiguration('stm_port')
     stm_baudrate = LaunchConfiguration('stm_baudrate')
@@ -84,6 +88,22 @@ def generate_launch_description():
         ],
     )
 
+    carto_pose_publisher_node = Node(
+        package='car_localization',
+        executable='carto_pose_publisher_node',
+        name='carto_pose_publisher_node',
+        output='screen',
+        condition=IfCondition(start_pose_publisher),
+        parameters=[{
+            'global_frame_id': 'map',
+            'base_frame_id': 'base_link',
+            'output_frame_id': 'car_map',
+            'pose_topic': pose_topic,
+            'publish_rate_hz': pose_publish_rate_hz,
+            'yaw_offset_rad': pose_yaw_offset_rad,
+        }],
+    )
+
     path_planner_node = Node(
         package='path_planner',
         executable='path_planner_node',
@@ -115,11 +135,15 @@ def generate_launch_description():
         DeclareLaunchArgument('start_stm', default_value='true'),
         DeclareLaunchArgument('start_carto', default_value='true'),
         DeclareLaunchArgument('start_navigation', default_value='true'),
+        DeclareLaunchArgument('start_pose_publisher', default_value='true'),
         DeclareLaunchArgument(
             'load_state_filename',
             default_value='/home/t/car_ws/carto/map/my_map.pbstream',
         ),
         DeclareLaunchArgument('obstacle_file', default_value=''),
+        DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
+        DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
+        DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
         DeclareLaunchArgument('stm_port', default_value='/dev/ttyS0'),
         DeclareLaunchArgument('stm_baudrate', default_value='576000'),
         DeclareLaunchArgument('laser_x', default_value='0.055'),
@@ -132,6 +156,7 @@ def generate_launch_description():
         lidar_launch,
         base_to_laser_tf,
         carto_localization_launch,
+        carto_pose_publisher_node,
         path_planner_node,
         path_controller_node,
     ])
