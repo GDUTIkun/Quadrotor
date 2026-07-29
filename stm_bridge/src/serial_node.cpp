@@ -253,6 +253,7 @@ public:
     debug_rx_hex_ = declare_parameter<bool>("debug_rx_hex", false);
     base_frame_id_ = declare_parameter<std::string>("base_frame_id", "car_base_link");
     odom_frame_id_ = declare_parameter<std::string>("odom_frame_id", "car_odom");
+    imu_frame_id_ = declare_parameter<std::string>("imu_frame_id", "car_imu_link");
     const auto cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "/cmd_vel");
     const auto imu_topic = declare_parameter<std::string>("imu_topic", "/car/imu/data_valid");
     const auto status_topic = declare_parameter<std::string>("status_topic", "/car/stm/status");
@@ -411,7 +412,7 @@ private:
 
     sensor_msgs::msg::Imu msg;
     msg.header.stamp = now();
-    msg.header.frame_id = base_frame_id_;
+    msg.header.frame_id = imu_frame_id_;
 
     const double roll = data.roll_cdeg / 100.0 * M_PI / 180.0;
     const double pitch = data.pitch_cdeg / 100.0 * M_PI / 180.0;
@@ -567,6 +568,7 @@ private:
   double diagnostics_rate_hz_{};
   std::string base_frame_id_;
   std::string odom_frame_id_;
+  std::string imu_frame_id_;
   bool debug_rx_hex_{};
   bool publish_wheel_odom_enabled_{};
   bool publish_odom_tf_{};

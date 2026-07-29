@@ -25,65 +25,71 @@
 - `lsn10_lidar`
 
   - LSN10P 激光雷达 ROS2 驱动。
-  - 当前雷达发布 `/scan`。
-  - 当前雷达 frame 为 `laser`。
+  - 整车 bringup 下当前雷达发布 `/car/scan`。
+  - 整车 bringup 下当前雷达 frame 为 `car_laser`。
   - 当前雷达串口固定为 `/dev/wheeltec_lidar`，实机 udev 指向 UART4_M0 `/dev/ttyS4`。
 
 Cartographer 当前关键设定：
 
-- `map_frame = "map"`
-- `tracking_frame = "base_link"`
-- `published_frame = "base_link"`
-- `odom_frame = "odom"`
+- `map_frame = "car_carto_map"`
+- `tracking_frame = "car_imu_link"`
+- `published_frame = "car_base_link"`
+- `odom_frame = "car_odom"`
 - `provide_odom_frame = true`
 - `use_odometry = false`
 - `TRAJECTORY_BUILDER_2D.use_imu_data = true`
-- IMU remap 到 `/track2vision/imu/data_valid`
+- IMU remap 到 `/car/imu/data_valid`
+- Cartographer 节点和 topic 放在 `/car` namespace 下，避免与飞机侧 Cartographer 冲突。
 
 因此首版 TF 链路应保持：
 
 ```text
-map -> odom -> base_link -> laser
+car_carto_map -> car_odom -> car_base_link -> car_laser
+                                      └── car_imu_link
 ```
 
 其中：
 
-- `map -> odom -> base_link` 由 Cartographer 发布。
-- `base_link -> laser` 由静态 TF 发布。
-- 小车首版不由 STM/ROS 桥发布 odom；`map -> odom -> base_link` 统一由 Cartographer 发布，避免 TF 或 odom 来源冲突。
+- `car_carto_map -> car_odom -> car_base_link` 由 Cartographer 发布。
+- `car_base_link -> car_laser` 由静态 TF 发布。
+- `car_base_link -> car_imu_link` 由静态 TF 发布。
+- 小车首版不由 STM/ROS 桥发布 odom；`car_carto_map -> car_odom -> car_base_link` 统一由 Cartographer 发布，避免 TF 或 odom 来源冲突。
 
 ## 2.1 当前 map 实现方式
 
 当前建图方式是 Cartographer 2D 激光 + IMU 建图，数据链路如下：
 
 ```text
-LSN10P lidar       -> /scan                         -> Cartographer
-STM IMU over UART  -> stm_bridge                    -> /track2vision/imu/data_valid -> Cartographer
-static TF launch   -> base_link -> laser            -> Cartographer 查找雷达外参
-Cartographer       -> map -> odom -> base_link      -> RViz/后续路径规划与控制使用
-Cartographer       -> /map                          -> occupancy grid 地图显示
-car_localization   -> /car/pose                     -> 对外发布右手 x/前 y/上 z 小车坐标
+LSN10P lidar       -> /car/scan                     -> Cartographer
+STM IMU over UART  -> stm_bridge                    -> /car/imu/data_valid -> Cartographer
+static TF launch   -> car_base_link -> car_laser    -> Cartographer 查找雷达外参
+static TF launch   -> car_base_link -> car_imu_link -> Cartographer 查找 IMU 外参
+Cartographer       -> car_carto_map -> car_odom -> car_base_link -> RViz/后续路径规划与控制使用
+Cartographer       -> /car/map                      -> occupancy grid 地图显示
+car_localization   -> /car/pose                     -> 对外发布右/前/上小车坐标
 ```
 
 具体实现：
 
-- `lslidar_driver` 发布 `/scan`，`frame_id = laser`。
-- `stm_bridge` 解析 STM 上传的 `0x81 IMU` 帧，发布 `/track2vision/imu/data_valid`，`frame_id = base_link`。
-- `car_bringup/launch/mapping.launch.py` 使用 `tf2_ros/static_transform_publisher` 发布静态 TF：`base_link -> laser`。
-- `carto/my_laser_with_imu.launch.py` 启动 `cartographer_node`，将 Cartographer 的 `imu` remap 到 `/track2vision/imu/data_valid`，`scan` 保持使用 `/scan`。
+- `lslidar_driver` 发布 `/car/scan`，`frame_id = car_laser`。
+- `stm_bridge` 解析 STM 上传的 `0x81 IMU` 帧，发布 `/car/imu/data_valid`，`frame_id = car_imu_link`。
+- `car_bringup/launch/mapping.launch.py` 使用 `tf2_ros/static_transform_publisher` 发布静态 TF：`car_base_link -> car_laser` 和 `car_base_link -> car_imu_link`。
+- `carto/my_laser_with_imu.launch.py` 启动 `/car/cartographer_node`，将 Cartographer 的 `imu` remap 到 `/car/imu/data_valid`，`scan` remap 到 `/car/scan`。
 - `carto/my_laser_with_imu.lua` 配置 `TRAJECTORY_BUILDER_2D.use_imu_data = true`，并设置 `num_laser_scans = 1`。
-- `cartographer_occupancy_grid_node` 根据 Cartographer 子图发布 `/map`，默认分辨率 `0.05 m`。
+- `/car/cartographer_occupancy_grid_node` 根据 Cartographer 子图发布 `/car/map`，默认分辨率 `0.05 m`。
 
 Cartographer frame 责任边界：
 
-- `map_frame = map`
-- `odom_frame = odom`
-- `tracking_frame = base_link`
-- `published_frame = base_link`
+- `map_frame = car_carto_map`
+- `odom_frame = car_odom`
+- `tracking_frame = car_imu_link`
+- `published_frame = car_base_link`
 - `provide_odom_frame = true`
 - `use_odometry = false`
 
-因此当前 map 的位姿来源不是 STM 轮式里程计，而是 Cartographer 使用 `/scan` 和 IMU 做 2D scan matching 后发布的 TF。STM 的职责是提供 IMU 和执行速度指令；小车首版不通过 STM 发布 `odom -> base_link`。
+Cartographer 要求 IMU frame 与 `tracking_frame` 共点；由于实车 IMU 相对底盘 `car_base_link` 有平移外参，因此 `tracking_frame` 使用 `car_imu_link`，`published_frame` 仍使用 `car_base_link` 对外提供底盘位姿。
+
+因此当前 map 的位姿来源不是 STM 轮式里程计，而是 Cartographer 使用 `/car/scan` 和 IMU 做 2D scan matching 后发布的 TF。STM 的职责是提供 IMU 和执行速度指令；小车首版不通过 STM 发布 `car_odom -> car_base_link`。
 
 `yaw + pi/2` 当前不参与建图链路。它只是参考原飞机 `track2vision` 工程时发现的 MAVROS 外部视觉坐标适配逻辑，小车是否需要该 yaw offset 待实车观察后决定。
 
@@ -113,17 +119,18 @@ car_ws/
 - 周期性向 STM 下发底盘速度指令。
 - 解析 STM 上传帧。
 - 发布 IMU 和 STM 状态。
-- 轮式里程计上行协议保留为调试/后续融合接口，首版 ROS 节点默认不发布 `/odom/wheel`。
+- 轮式里程计上行协议保留为调试/后续融合接口，首版 ROS 节点默认不发布 `/car/odom/wheel`。
 - 实现通信 watchdog，ROS 指令超时后自动下发零速。
+- 注意：`/cmd_vel` 当前仍是全局 topic。Cartographer 相关 topic/node/frame 已隔离；若飞机侧也会发布 `/cmd_vel`，控制链路还需要进一步切到 `/car/cmd_vel`。
 
 ROS 接口：
 
 | 方向 | Topic                            | 类型                                    | 说明                                 |
 | ---- | -------------------------------- | --------------------------------------- | ------------------------------------ |
 | 订阅 | `/cmd_vel`                     | `geometry_msgs/msg/Twist`             | ROS 到 STM 的速度指令来源            |
-| 发布 | `/track2vision/imu/data_valid` | `sensor_msgs/msg/Imu`                 | Cartographer 使用的 IMU              |
-| 发布 | `/stm/status`                  | `diagnostic_msgs/msg/DiagnosticArray` | 电压、电流、状态机、错误码、通信统计 |
-| 预留 | `/odom/wheel`                  | `nav_msgs/msg/Odometry`               | 默认关闭，仅调试或后续融合时启用     |
+| 发布 | `/car/imu/data_valid`          | `sensor_msgs/msg/Imu`                 | Cartographer 使用的 IMU              |
+| 发布 | `/car/stm/status`              | `diagnostic_msgs/msg/DiagnosticArray` | 电压、电流、状态机、错误码、通信统计 |
+| 预留 | `/car/odom/wheel`              | `nav_msgs/msg/Odometry`               | 默认关闭，仅调试或后续融合时启用     |
 
 默认参数：
 
@@ -133,17 +140,21 @@ ROS 接口：
 | `baudrate`           | `576000`                   | 串口波特率                                               |
 | `cmd_rate_hz`        | `50.0`                     | 速度指令下发频率                                         |
 | `cmd_timeout_s`      | `0.3`                      | `/cmd_vel` 超时时间                                    |
-| `base_frame_id`      | `base_link`                | IMU 与底盘 frame                                         |
-| `publish_wheel_odom` | `false`                    | 是否发布`/odom/wheel`，首版关闭                        |
-| `publish_odom_tf`    | `false`                    | 必须保持关闭，`odom -> base_link` 由 Cartographer 发布 |
-| `yaw_offset_rad`     | `0.0`                      | 坐标修正预留；是否需要`+pi/2` 待实车测试确认           |
+| `base_frame_id`      | `car_base_link`            | IMU 与底盘 frame                                         |
+| `odom_frame_id`      | `car_odom`                 | 轮式里程计预留 frame                                     |
+| `imu_frame_id`       | `car_imu_link`             | IMU 消息 frame                                           |
+| `imu_topic`          | `/car/imu/data_valid`      | IMU 发布 topic                                           |
+| `status_topic`       | `/car/stm/status`          | STM 诊断状态 topic                                       |
+| `wheel_odom_topic`   | `/car/odom/wheel`          | 轮式里程计预留 topic                                     |
+| `publish_wheel_odom` | `false`                    | 是否发布 `/car/odom/wheel`，首版关闭                    |
+| `publish_odom_tf`    | `false`                    | 必须保持关闭，`car_odom -> car_base_link` 由 Cartographer 发布 |
 
 ### 3.2 `point_controller`
 
 职责：
 
 - 接收地图坐标系下的目标点。
-- 查询 `map -> base_link` TF。
+- 查询 `car_carto_map -> car_base_link` TF。
 - 计算当前位置到目标点的距离误差和角度误差。
 - 输出 `/cmd_vel`，由 `stm_bridge` 下发给 STM。
 
@@ -175,8 +186,8 @@ ROS 接口：
 
 | 参数                      | 默认值        | 说明                  |
 | ------------------------- | ------------- | --------------------- |
-| `global_frame_id`       | `map`       | 目标点坐标系          |
-| `base_frame_id`         | `base_link` | 小车本体坐标系        |
+| `global_frame_id`       | `car_carto_map` | 目标点坐标系          |
+| `base_frame_id`         | `car_base_link` | 小车本体坐标系        |
 | `control_rate_hz`       | `20.0`      | 控制频率              |
 | `xy_tolerance_m`        | `0.05`      | 到点距离阈值          |
 | `yaw_tolerance_rad`     | `0.087`     | 到点角度阈值，约 5 度 |
@@ -193,7 +204,7 @@ ROS 接口：
 - 统一启动整车相关节点。
 - 提供建图 launch。
 - 提供纯定位 + 定点控制 launch。
-- 发布 `base_link -> laser` 静态 TF。
+- 发布 `car_base_link -> car_laser` 和 `car_base_link -> car_imu_link` 静态 TF。
 - 启动 `car_localization` 对外发布小车定位坐标。
 - 避免每次手动启动多个 launch。
 
@@ -208,7 +219,7 @@ car_bringup/launch/localization_control.launch.py
 
 - LSN10 雷达驱动。
 - STM 串口桥。
-- `base_link -> laser` 静态 TF。
+- `car_base_link -> car_laser` 和 `car_base_link -> car_imu_link` 静态 TF。
 - Cartographer 建图。
 - `car_localization` 小车坐标发布节点。
 
@@ -216,7 +227,7 @@ car_bringup/launch/localization_control.launch.py
 
 - LSN10 雷达驱动。
 - STM 串口桥。
-- `base_link -> laser` 静态 TF。
+- `car_base_link -> car_laser` 和 `car_base_link -> car_imu_link` 静态 TF。
 - Cartographer 纯定位。
 - `car_localization` 小车坐标发布节点。
 - `path_planner` 静态禁入区路径规划节点。
@@ -226,7 +237,7 @@ car_bringup/launch/localization_control.launch.py
 
 职责：
 
-- 查询 Cartographer 发布的 `map -> base_link` TF。
+- 查询 Cartographer 发布的 `car_carto_map -> car_base_link` TF。
 - 不发布 TF，不改变 Cartographer、路径规划器和控制器使用的 ROS 标准坐标。
 - 将 Cartographer 位姿额外转换成对外坐标 topic，坐标约定为 `+x` 向右、`+y` 向前、`+z` 向上。
 
@@ -249,8 +260,8 @@ car_pose.yaw = cartographer_yaw + pi/2 + yaw_offset_rad
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `global_frame_id` | `map` | Cartographer 全局 frame |
-| `base_frame_id` | `base_link` | 小车本体 frame |
+| `global_frame_id` | `car_carto_map` | Cartographer 全局 frame |
+| `base_frame_id` | `car_base_link` | 小车本体 frame |
 | `output_frame_id` | `car_map` | `/car/pose` 的 frame，轴定义为右/前/上 |
 | `pose_topic` | `/car/pose` | 对外发布的小车坐标 topic |
 | `publish_rate_hz` | `20.0` | 坐标发布频率 |
@@ -353,8 +364,8 @@ crc16_ibm("123456789") = 0xBB3D
 首轮通信测试最低要求：
 
 - STM 至少发送 `0x83 STATUS`，用于确认串口、帧头、长度和 CRC。
-- 然后发送 `0x81 IMU`，用于启动 Cartographer 需要的 `/track2vision/imu/data_valid`。
-- `0x82 WHEEL_ODOM` 是预留调试接口，首版不要求 STM 发送，ROS 默认不发布 `/odom/wheel`。
+- 然后发送 `0x81 IMU`，用于启动 Cartographer 需要的 `/car/imu/data_valid`。
+- `0x82 WHEEL_ODOM` 是预留调试接口，首版不要求 STM 发送，ROS 默认不发布 `/car/odom/wheel`。
 
 ### 4.4 ROS -> STM：`0x01 CMD_VEL`
 
@@ -430,9 +441,9 @@ uint32 stamp_ms
 
 ROS 发布：
 
-- Topic：`/track2vision/imu/data_valid`
+- Topic：`/car/imu/data_valid`
 - 类型：`sensor_msgs/msg/Imu`
-- `header.frame_id = base_link`
+- `header.frame_id = car_imu_link`
 - ROS 首版使用接收时刻作为 `header.stamp`，`stamp_ms` 先用于诊断和时序检查。
 
 单位转换：
@@ -466,7 +477,7 @@ AA 55 81 00 16 00 00 00 00 E8 03 00 00 00 00 00 00 00 00 00 00 00 00 E8 03 00 00
 
 ### 4.6 STM -> ROS：`0x82 WHEEL_ODOM`，预留接口
 
-小车首版不使用 STM 里程计参与建图或定位，也不让串口桥发布 odom。该消息仅作为调试或后续融合预留；未启用 `publish_wheel_odom` 时，ROS 侧即使收到该帧也不发布 `/odom/wheel`。
+小车首版不使用 STM 里程计参与建图或定位，也不让串口桥发布 odom。该消息仅作为调试或后续融合预留；未启用 `publish_wheel_odom` 时，ROS 侧即使收到该帧也不发布 `/car/odom/wheel`。
 
 payload，长度 24：
 
@@ -494,13 +505,13 @@ uint32 stamp_ms
 
 ROS 发布：
 
-- Topic：`/odom/wheel`
+- Topic：`/car/odom/wheel`
 - 类型：`nav_msgs/msg/Odometry`
-- `header.frame_id = odom`
-- `child_frame_id = base_link`
+- `header.frame_id = car_odom`
+- `child_frame_id = car_base_link`
 - 默认不发布。
-- 即使后续打开 `/odom/wheel` 调试，也不发布 `odom -> base_link` TF。
-- 小车项目的 `map -> odom -> base_link` 统一由 Cartographer 发布。
+- 即使后续打开 `/car/odom/wheel` 调试，也不发布 `car_odom -> car_base_link` TF。
+- 小车项目的 `car_carto_map -> car_odom -> car_base_link` 统一由 Cartographer 发布。
 
 样例帧：
 
@@ -531,7 +542,7 @@ uint32 stamp_ms
 
 ROS 发布：
 
-- Topic：`/stm/status`
+- Topic：`/car/stm/status`
 - 类型：`diagnostic_msgs/msg/DiagnosticArray`
 
 状态枚举：
@@ -566,8 +577,8 @@ AA 55 83 00 0B E0 2E 00 00 01 00 00 E8 03 00 00 85 A4
 
 为了先验证 ROS 串口桥，STM 可按以下顺序发送：
 
-1. 1 Hz 发送 `STATUS`，确认 ROS 能收到 `/stm/status`。
-2. 50 Hz 发送水平静止 `IMU`，确认 ROS 能收到 `/track2vision/imu/data_valid`。
+1. 1 Hz 发送 `STATUS`，确认 ROS 能收到 `/car/stm/status`。
+2. 50 Hz 发送水平静止 `IMU`，确认 ROS 能收到 `/car/imu/data_valid`。
 3. ROS 发布 `/cmd_vel` 后，STM 打印收到的 `CMD_VEL` 中的 `v_mm_s`、`w_mrad_s` 和 `enable`。
 4. 停止 ROS `/cmd_vel` 输入后，确认 STM 在 watchdog 时间内停车。
 5. 如需调试轮式里程计，再临时打开 `publish_wheel_odom` 并发送 `WHEEL_ODOM`。
@@ -578,30 +589,38 @@ AA 55 83 00 0B E0 2E 00 00 01 00 00 E8 03 00 00 85 A4
 
 | frame         | 说明                              |
 | ------------- | --------------------------------- |
-| `map`       | Cartographer 地图坐标系           |
-| `odom`      | Cartographer 输出的局部连续坐标系 |
-| `base_link` | 小车本体坐标系                    |
-| `laser`     | 激光雷达坐标系                    |
-| `car_map` | 对外坐标发布 frame，`+x` 向右、`+y` 向前、`+z` 向上 |
+| `car_carto_map` | Cartographer 地图坐标系 |
+| `car_odom` | Cartographer 输出的局部连续坐标系 |
+| `car_base_link` | 小车本体坐标系 |
+| `car_laser` | 激光雷达坐标系 |
+| `car_imu_link` | IMU 坐标系 |
+| `car_map` | `/car/pose` 对外坐标发布 frame，`+x` 向右、`+y` 向前、`+z` 向上 |
 
 ### 5.2 静态 TF
 
 必须发布：
 
 ```text
-base_link -> laser
+car_base_link -> car_laser
+car_base_link -> car_imu_link
 ```
 
 建议做成 launch 参数：
 
 | 参数            | 默认值   | 说明                    |
 | --------------- | -------- | ----------------------- |
-| `laser_x`     | `0.055`  | 雷达相对 base_link 的 x |
-| `laser_y`     | `0.0`  | 雷达相对 base_link 的 y |
-| `laser_z`     | `0.015` | 雷达相对 base_link 的 z |
+| `laser_x`     | `0.06842` | 雷达相对 `car_base_link` 的 x |
+| `laser_y`     | `0.0`    | 雷达相对 `car_base_link` 的 y |
+| `laser_z`     | `0.01246` | 雷达相对 `car_base_link` 的 z |
 | `laser_roll`  | `0.0`  | 雷达 roll               |
 | `laser_pitch` | `0.0`  | 雷达 pitch              |
-| `laser_yaw`   | `-1.5708`  | 雷达 yaw，单位 rad；当前实测雷达坐标需相对 `base_link` 旋转 -90 度 |
+| `laser_yaw`   | `-1.5708`  | 雷达 yaw，单位 rad；当前实测雷达坐标需相对 `car_base_link` 旋转 -90 度 |
+| `imu_x`       | `0.0`     | IMU 相对 `car_base_link` 的 x |
+| `imu_y`       | `-0.0146` | IMU 相对 `car_base_link` 的 y |
+| `imu_z`       | `0.075`   | IMU 相对 `car_base_link` 的 z |
+| `imu_roll`    | `0.0`     | IMU roll |
+| `imu_pitch`   | `0.0`     | IMU pitch |
+| `imu_yaw`     | `0.0`     | IMU yaw |
 
 实际安装后需要按机械结构修改。
 
@@ -611,8 +630,8 @@ base_link -> laser
 
 小车实测时按以下顺序确认：
 
-1. 不加 yaw offset，观察 Cartographer 中 `base_link` 朝向是否与车头一致。
-2. 给小车原地逆时针转动，确认 `base_link` yaw 是否按 ROS 右手系增大。
+1. 不加 yaw offset，观察 Cartographer 中 `car_base_link` 朝向是否与车头一致。
+2. 给小车原地逆时针转动，确认 `car_base_link` yaw 是否按 ROS 右手系增大。
 3. 若发现车头方向与地图显示固定相差 90 度，再考虑设置 `yaw_offset_rad = pi/2`。
 4. 该修正只能加在明确需要坐标适配的位置，不能同时在 IMU、TF、控制器多处重复修正。
 
@@ -630,21 +649,23 @@ ls -l /dev/wheeltec_controller
 检查雷达：
 
 ```bash
-ros2 topic hz /scan
-ros2 topic echo /scan --once
+ros2 topic hz /car/scan
+ros2 topic echo /car/scan --once
 ```
 
 检查 IMU：
 
 ```bash
-ros2 topic hz /track2vision/imu/data_valid
-ros2 topic echo /track2vision/imu/data_valid --once
+ros2 topic hz /car/imu/data_valid
+ros2 topic echo /car/imu/data_valid --once
 ```
 
 检查 TF：
 
 ```bash
-ros2 run tf2_ros tf2_echo base_link laser
+ros2 run tf2_ros tf2_echo car_base_link car_laser
+ros2 run tf2_ros tf2_echo car_base_link car_imu_link
+ros2 run tf2_ros tf2_echo car_carto_map car_base_link
 ```
 
 ### 6.2 建图启动
@@ -667,8 +688,8 @@ ros2 launch car_bringup mapping.launch.py
 建图完成后保存 `.pbstream`：
 
 ```bash
-ros2 service call /cartographer_node/finish_trajectory cartographer_ros_msgs/srv/FinishTrajectory "{trajectory_id: 0}"
-ros2 service call /cartographer_node/write_state cartographer_ros_msgs/srv/WriteState "{filename: '/home/t/car_ws/carto/map/my_map.pbstream', include_unfinished_submaps: true}"
+ros2 service call /car/finish_trajectory cartographer_ros_msgs/srv/FinishTrajectory "{trajectory_id: 0}"
+ros2 service call /car/write_state cartographer_ros_msgs/srv/WriteState "{filename: '/home/t/car_ws/carto/map/my_map.pbstream', include_unfinished_submaps: true}"
 ```
 
 地图统一保存到：
@@ -699,7 +720,7 @@ ros2 launch car_bringup localization_control.launch.py load_state_filename:=/hom
 
 ```bash
 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped "{
-  header: {frame_id: 'map'},
+  header: {frame_id: 'car_carto_map'},
   pose: {
     position: {x: 1.0, y: 0.0, z: 0.0},
     orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
@@ -707,7 +728,7 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped "{
 }"
 ```
 
-控制节点读取 `map -> base_link`，输出 `/cmd_vel`。
+控制节点读取 `car_carto_map -> car_base_link`，输出 `/cmd_vel`。
 
 STM 只需要继续执行速度指令，不需要理解目标点。
 
@@ -718,24 +739,24 @@ STM 只需要继续执行速度指令，不需要理解目标点。
 - 完成 `program.md`。
 - 确认 STM 串口协议字段、单位、坐标系。
 - 确认雷达和 STM 的 udev 名称。
-- 确认 `base_link -> laser` 的实际安装参数。
+- 确认 `car_base_link -> car_laser` 的实际安装参数。
 
 ### 阶段 2：实现 `stm_bridge`
 
-- 新建 ROS2 Python 包 `stm_bridge`。
+- 新建 ROS2 C++ 包 `stm_bridge`。
 - 实现 CRC-16/IBM。
 - 实现二进制帧打包和增量解析。
 - 实现 `/cmd_vel` 到 `CMD_VEL` 串口帧。
 - 实现 `IMU`、`WHEEL_ODOM`、`STATUS` 三类上行帧解析。
-- 发布 `/track2vision/imu/data_valid` 和 `/stm/status`。
-- `WHEEL_ODOM` 解析逻辑作为预留接口；首版默认不发布 `/odom/wheel`。
+- 发布 `/car/imu/data_valid` 和 `/car/stm/status`。
+- `WHEEL_ODOM` 解析逻辑作为预留接口；首版默认不发布 `/car/odom/wheel`。
 - 加入 ROS 侧 `/cmd_vel` watchdog。
 
 ### 阶段 3：实现 `point_controller`
 
-- 新建 ROS2 Python 包 `point_controller`。
+- 新建 ROS2 C++ 包 `point_controller`。
 - 订阅 `/goal_pose`。
-- 查询 `map -> base_link`。
+- 查询 `car_carto_map -> car_base_link`。
 - 实现三阶段控制：
   - 对准目标方向。
   - 前进并修正航向。
@@ -748,7 +769,7 @@ STM 只需要继续执行速度指令，不需要理解目标点。
 - 新建 ROS2 包 `car_bringup`。
 - 增加 `mapping.launch.py`。
 - 增加 `localization_control.launch.py`。
-- 在 launch 中发布 `base_link -> laser` 静态 TF。
+- 在 launch 中发布 `car_base_link -> car_laser` 静态 TF。
 - 将雷达串口参数固定为 `/dev/wheeltec_lidar`。
 - 将 STM 串口参数固定为 `/dev/wheeltec_controller`。
 
@@ -758,7 +779,7 @@ STM 只需要继续执行速度指令，不需要理解目标点。
 
 1. 只测串口协议。
 2. 测 STM 上传 IMU。
-3. 测雷达 `/scan`。
+3. 测雷达 `/car/scan`。
 4. 测静态 TF。
 5. 启动 Cartographer 建图。
 6. 保存 `.pbstream`。
@@ -783,27 +804,28 @@ STM 只需要继续执行速度指令，不需要理解目标点。
 
 ```bash
 ros2 topic hz /cmd_vel
-ros2 topic hz /track2vision/imu/data_valid
-ros2 topic echo /stm/status
+ros2 topic hz /car/imu/data_valid
+ros2 topic echo /car/stm/status
 ```
 
 验证项：
 
 - `/cmd_vel` 正常下发。
 - `/cmd_vel` 停止后 300 ms 内下发零速。
-- IMU frame 为 `base_link`。
-- `/stm/status` 能显示错误码和通信统计。
-- 默认不存在 `/odom/wheel`，小车 odom/TF 由 Cartographer 发布。
+- IMU frame 为 `car_imu_link`。
+- `/car/stm/status` 能显示错误码和通信统计。
+- 默认不存在 `/car/odom/wheel`，小车 odom/TF 由 Cartographer 发布。
 
 ### 9.3 Cartographer 测试
 
 验证项：
 
-- `/scan` 正常。
-- `/track2vision/imu/data_valid` 正常。
-- `base_link -> laser` 存在。
+- `/car/scan` 正常。
+- `/car/imu/data_valid` 正常。
+- `car_base_link -> car_laser` 存在。
+- `car_base_link -> car_imu_link` 存在。
 - Cartographer 不再因为缺少 IMU 或 TF 卡住。
-- 建图过程中 `map -> odom -> base_link` 连续发布。
+- 建图过程中 `car_carto_map -> car_odom -> car_base_link` 连续发布。
 - 保存后的 `.pbstream` 可被纯定位 launch 加载。
 
 ### 9.4 定点控制测试
@@ -828,7 +850,7 @@ ros2 topic echo /stm/status
 - 雷达串口和 STM 串口必须用 udev 固定名称，不能依赖 `/dev/ttyACM0`。
 - STM 与 ROS 的坐标系必须完全一致，否则 Cartographer 和定点控制都会异常。
 - Cartographer 当前使用 IMU，IMU 的 `frame_id`、方向、单位必须正确。
-- 小车首版不发布 STM 轮式 odom；`map -> odom -> base_link` 由 Cartographer 统一发布。
+- 小车首版不发布 STM 轮式 odom；`car_carto_map -> car_odom -> car_base_link` 由 Cartographer 统一发布。
 - 原飞机工程中的 `yaw + pi/2` 是待实测项，不默认启用，避免未验证的坐标补偿污染 IMU、TF 或控制逻辑。
 - 定点控制没有避障能力，只适合在已知、低速、安全环境中测试。
 - 实车第一次测试必须限速，并保证急停可用。
@@ -841,6 +863,6 @@ ros2 topic echo /stm/status
 2. STM 侧 IMU 角速度已按 v1.1 使用 `int16 cdeg/s`，ROS 侧按 `cdeg_s * pi / (180 * 100)` 转为 rad/s。
 3. STM 侧 IMU 坐标轴已按 ROS 坐标系初步验证：x 前、y 左、z 上；左转 `angular_velocity.z` 为正，右转为负。
 4. 小车底盘实际参数：轮距、轮径、编码器分辨率是否已经在 STM 内部配置完成。
-5. 雷达相对 `base_link` 的当前实测安装位姿：`x=0.055, y=0.0, z=0.015, yaw=-1.5708 rad`。
-6. 是否需要额外 `yaw_offset_rad`：当前不需要；已通过 `base_link -> laser` 静态 TF 修正雷达 yaw。
+5. 雷达相对 `car_base_link` 的当前实测安装位姿：`x=0.06842, y=0.0, z=0.01246, yaw=-1.5708 rad`。
+6. 是否需要额外 `yaw_offset_rad`：当前不需要；已通过 `car_base_link -> car_laser` 静态 TF 修正雷达 yaw。
 7. 硬件急停是否接入 STM，并通过 `STATUS.error_flags` 的 bit3 或新增错误位上报。

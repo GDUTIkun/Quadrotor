@@ -56,17 +56,17 @@ PYTHONPATH=car/stm_bridge python3 -m stm_bridge.uart_loopback_test
 发布：
 
 ```text
-/track2vision/imu/data_valid    sensor_msgs/msg/Imu
-/stm/status                     diagnostic_msgs/msg/DiagnosticArray
+/car/imu/data_valid             sensor_msgs/msg/Imu
+/car/stm/status                 diagnostic_msgs/msg/DiagnosticArray
 ```
 
 预留调试接口，默认关闭：
 
 ```text
-/odom/wheel                     nav_msgs/msg/Odometry
+/car/odom/wheel                 nav_msgs/msg/Odometry
 ```
 
-小车首版的 `map -> odom -> base_link` 由 Cartographer 发布，`stm_bridge` 默认不发布 wheel odom，也不发布 `odom -> base_link` TF。
+小车首版的 `car_carto_map -> car_odom -> car_base_link` 由 Cartographer 发布，`stm_bridge` 默认不发布 wheel odom，也不发布 `car_odom -> car_base_link` TF。IMU 消息默认使用 `header.frame_id = car_imu_link`，由 bringup 发布 `car_base_link -> car_imu_link` 静态 TF。
 
 ## 首轮实测顺序
 
@@ -74,10 +74,10 @@ PYTHONPATH=car/stm_bridge python3 -m stm_bridge.uart_loopback_test
 2. ROS 侧检查：
 
 ```bash
-ros2 topic echo /stm/status
+ros2 topic echo /car/stm/status
 ```
 
-`/stm/status` 会由 ROS 侧每秒发布一次通信诊断，即使还没有收到 STM 的 `STATUS` 帧也会发布。重点看：
+`/car/stm/status` 会由 ROS 侧每秒发布一次通信诊断，即使还没有收到 STM 的 `STATUS` 帧也会发布。重点看：
 
 ```text
 raw_rx_bytes      ROS 串口接收到的原始上行字节数
@@ -97,8 +97,8 @@ ros2 launch stm_bridge stm_bridge.launch.py debug_rx_hex:=true
 4. ROS 侧检查：
 
 ```bash
-ros2 topic hz /track2vision/imu/data_valid
-ros2 topic echo /track2vision/imu/data_valid --once
+ros2 topic hz /car/imu/data_valid
+ros2 topic echo /car/imu/data_valid --once
 ```
 
 5. 抬轮后测试 ROS 下发速度：

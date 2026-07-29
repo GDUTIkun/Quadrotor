@@ -122,7 +122,7 @@ def generate_launch_description():
     finish_trajectory_service = ExecuteProcess(
         cmd=[
             'ros2', 'service', 'call',
-            '/car/cartographer_node/finish_trajectory',
+            '/car/finish_trajectory',
             'cartographer_ros_msgs/srv/FinishTrajectory',
             '{"trajectory_id": 0}'
         ],
