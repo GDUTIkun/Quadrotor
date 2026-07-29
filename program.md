@@ -531,6 +531,7 @@ reason=running
 
 - 单独调试角度外环，不跑完整操场路径。
 - 半径默认 `0.75 m`，收到 `start` 时以当前 `/car/pose` 为圆上起点生成圆心。
+- target 点由内部连续参考圆进度生成，不直接用 noisy pose 投影点逐帧重算，因此 `target_x/target_y` 是光滑圆。
 - 角度外环按圆轨迹前瞻点计算 `target_yaw/yaw_error/target_w`。
 - 角速度内环沿用已调好的 PID 参数，发布 `/cmd_vel`。
 
@@ -541,13 +542,13 @@ cd ~/flight_ws/car
 source install/setup.bash
 ros2 launch track_runner circle_angle_tuner.launch.py \
   radius_m:=0.75 \
-  linear_speed_m_s:=0.02 \
+  linear_speed_m_s:=0.03 \
   lookahead_distance_m:=0.25 \
-  k_w:=0.4 \
+  k_w:=0.6 \
   k_w_rate:=0.32 \
   k_i_rate:=0.9 \
   k_d_rate:=0.0 \
-  w_max_rad_s:=0.3
+  w_max_rad_s:=0.8
 ```
 
 开始、停止和反向：

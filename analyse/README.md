@@ -79,6 +79,7 @@ The CSV and PNG tracking plot are written under `analyse/log/` by default. Usefu
 
 - `pose_yaw_rad`, `target_yaw_rad`, `yaw_error_rad`: angle-loop tracking data.
 - `target_w_rad_s`, `measured_w_rad_s`, `cmd_w_rad_s`: angular-rate inner-loop data.
+- `target_x`, `target_y`, `reference_theta_rad`: smooth circle target-point data.
 - `k_w`, `k_w_rate`, `k_i_rate`, `k_d_rate`, `lookahead_m`: active tuning parameters.
 
 Plot an existing circle-angle CSV:

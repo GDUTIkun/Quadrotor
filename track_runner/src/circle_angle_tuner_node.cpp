@@ -64,15 +64,15 @@ public:
   {
     radius_m_ = declare_parameter<double>("radius_m", 0.75);
     lookahead_distance_m_ = declare_parameter<double>("lookahead_distance_m", 0.25);
-    linear_speed_m_s_ = declare_parameter<double>("linear_speed_m_s", 0.02);
-    k_w_ = declare_parameter<double>("k_w", 0.4);
+    linear_speed_m_s_ = declare_parameter<double>("linear_speed_m_s", 0.03);
+    k_w_ = declare_parameter<double>("k_w", 0.6);
     k_w_rate_ = declare_parameter<double>("k_w_rate", 0.32);
     k_i_rate_ = declare_parameter<double>("k_i_rate", 0.9);
     k_d_rate_ = declare_parameter<double>("k_d_rate", 0.0);
     w_error_integral_max_ = declare_parameter<double>("w_error_integral_max", 0.5);
     w_error_derivative_filter_tau_s_ =
       declare_parameter<double>("w_error_derivative_filter_tau_s", 0.05);
-    w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.3);
+    w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.8);
     pose_timeout_s_ = declare_parameter<double>("pose_timeout_s", 0.5);
     odom_timeout_s_ = declare_parameter<double>("odom_timeout_s", 0.35);
     clockwise_ = declare_parameter<bool>("clockwise", true);
@@ -95,15 +95,15 @@ public:
 
     radius_m_ = std::max(0.05, finite_or(radius_m_, 0.75));
     lookahead_distance_m_ = std::max(0.01, finite_or(lookahead_distance_m_, 0.25));
-    linear_speed_m_s_ = std::max(0.0, finite_or(linear_speed_m_s_, 0.02));
-    k_w_ = std::max(0.0, finite_or(k_w_, 0.4));
+    linear_speed_m_s_ = std::max(0.0, finite_or(linear_speed_m_s_, 0.03));
+    k_w_ = std::max(0.0, finite_or(k_w_, 0.6));
     k_w_rate_ = std::max(0.0, finite_or(k_w_rate_, 0.32));
     k_i_rate_ = std::max(0.0, finite_or(k_i_rate_, 0.9));
     k_d_rate_ = std::max(0.0, finite_or(k_d_rate_, 0.0));
     w_error_integral_max_ = std::max(0.0, finite_or(w_error_integral_max_, 0.5));
     w_error_derivative_filter_tau_s_ =
       std::max(0.0, finite_or(w_error_derivative_filter_tau_s_, 0.05));
-    w_max_rad_s_ = std::max(0.0, finite_or(w_max_rad_s_, 0.3));
+    w_max_rad_s_ = std::max(0.0, finite_or(w_max_rad_s_, 0.8));
     pose_timeout_s_ = std::max(0.02, finite_or(pose_timeout_s_, 0.5));
     odom_timeout_s_ = std::max(0.02, finite_or(odom_timeout_s_, 0.35));
 
@@ -265,6 +265,7 @@ private:
     center_ = Point{
       pose_.x + side * radius_m_ * right_x,
       pose_.y + side * radius_m_ * right_y};
+    reference_theta_ = std::atan2(pose_.y - center_.y, pose_.x - center_.x);
     has_circle_ = true;
   }
 
@@ -274,9 +275,11 @@ private:
       configure_circle_from_pose();
     }
 
+    const auto stamp = now();
+    const double dt = control_dt(stamp);
     const double direction = clockwise_ ? -1.0 : 1.0;
-    const double current_theta = std::atan2(pose_.y - center_.y, pose_.x - center_.x);
-    const double target_theta = current_theta + direction * lookahead_distance_m_ / radius_m_;
+    reference_theta_ += direction * linear_speed_m_s_ * dt / radius_m_;
+    const double target_theta = reference_theta_ + direction * lookahead_distance_m_ / radius_m_;
     last_target_ = Point{
       center_.x + radius_m_ * std::cos(target_theta),
       center_.y + radius_m_ * std::sin(target_theta)};
@@ -287,8 +290,6 @@ private:
     last_yaw_error_ = normalize_angle(last_target_yaw_ - pose_.yaw);
     last_target_w_ = std::clamp(k_w_ * last_yaw_error_, -w_max_rad_s_, w_max_rad_s_);
 
-    const auto stamp = now();
-    const double dt = control_dt(stamp);
     last_w_error_ = last_target_w_ - measured_w_rad_s_;
     w_error_integral_ = std::clamp(
       w_error_integral_ + last_w_error_ * dt,
@@ -367,6 +368,7 @@ private:
            << " k_d_rate=" << k_d_rate_
            << " pose=(" << pose_.x << "," << pose_.y << "," << pose_.yaw << ")"
            << " center=(" << center_.x << "," << center_.y << ")"
+           << " reference_theta=" << reference_theta_
            << " target=(" << last_target_.x << "," << last_target_.y << ")"
            << " target_yaw=" << last_target_yaw_
            << " yaw_error=" << last_yaw_error_
@@ -386,14 +388,14 @@ private:
 
   double radius_m_{0.75};
   double lookahead_distance_m_{0.25};
-  double linear_speed_m_s_{0.02};
-  double k_w_{0.4};
+  double linear_speed_m_s_{0.03};
+  double k_w_{0.6};
   double k_w_rate_{0.32};
   double k_i_rate_{0.9};
   double k_d_rate_{0.0};
   double w_error_integral_max_{0.5};
   double w_error_derivative_filter_tau_s_{0.05};
-  double w_max_rad_s_{0.3};
+  double w_max_rad_s_{0.8};
   double pose_timeout_s_{0.5};
   double odom_timeout_s_{0.35};
   bool clockwise_{true};
@@ -406,6 +408,7 @@ private:
   Pose2D pose_{};
   Point center_{};
   Point last_target_{};
+  double reference_theta_{0.0};
   double measured_w_rad_s_{0.0};
   double last_target_yaw_{0.0};
   double last_yaw_error_{0.0};
