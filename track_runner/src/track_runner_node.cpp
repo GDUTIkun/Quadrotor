@@ -97,9 +97,12 @@ public:
     waypoint_tolerance_m_ = declare_parameter<double>("waypoint_tolerance_m", 0.08);
     goal_tolerance_m_ = declare_parameter<double>("goal_tolerance_m", 0.10);
     k_w_ = declare_parameter<double>("k_w", 1.8);
-    k_w_rate_ = declare_parameter<double>("k_w_rate", 1.0);
-    k_i_rate_ = declare_parameter<double>("k_i_rate", 0.0);
+    k_w_rate_ = declare_parameter<double>("k_w_rate", 0.32);
+    k_i_rate_ = declare_parameter<double>("k_i_rate", 0.9);
+    k_d_rate_ = declare_parameter<double>("k_d_rate", 0.0);
     w_error_integral_max_ = declare_parameter<double>("w_error_integral_max", 0.5);
+    w_error_derivative_filter_tau_s_ =
+      declare_parameter<double>("w_error_derivative_filter_tau_s", 0.05);
     w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.6);
     pose_timeout_s_ = declare_parameter<double>("pose_timeout_s", 0.5);
     angular_velocity_timeout_s_ = declare_parameter<double>("angular_velocity_timeout_s", 0.35);
@@ -130,7 +133,9 @@ public:
     goal_tolerance_m_ = std::max(0.01, goal_tolerance_m_);
     k_w_rate_ = std::max(0.0, k_w_rate_);
     k_i_rate_ = std::max(0.0, k_i_rate_);
+    k_d_rate_ = std::max(0.0, k_d_rate_);
     w_error_integral_max_ = std::max(0.0, w_error_integral_max_);
+    w_error_derivative_filter_tau_s_ = std::max(0.0, w_error_derivative_filter_tau_s_);
     lap_length_m_ = 2.0 * straight_length_m_ + 2.0 * M_PI * radius_m_;
     build_path();
 
@@ -310,7 +315,7 @@ private:
     if (state_ == RunnerState::Running) {
       if (!pose_is_fresh()) {
         publish_stop();
-        reset_rate_integral();
+        reset_rate_pid_state();
         status_reason_ = "pose_unavailable";
       } else {
         publish_tracking_command();
@@ -368,11 +373,13 @@ private:
       w_error_integral_ = std::clamp(
         w_error_integral_ + last_w_error_ * dt,
         -w_error_integral_max_, w_error_integral_max_);
+      update_rate_derivative(dt);
       w = std::clamp(
-        k_w_rate_ * last_w_error_ + k_i_rate_ * w_error_integral_,
+        k_w_rate_ * last_w_error_ + k_i_rate_ * w_error_integral_ +
+          k_d_rate_ * w_error_derivative_,
         -w_max_rad_s_, w_max_rad_s_);
     } else {
-      reset_rate_integral();
+      reset_rate_pid_state();
       last_control_time_ = now();
     }
 
@@ -473,6 +480,33 @@ private:
     w_error_integral_ = 0.0;
   }
 
+  void reset_rate_derivative()
+  {
+    w_error_derivative_ = 0.0;
+    previous_w_error_ = 0.0;
+    has_previous_w_error_ = false;
+  }
+
+  void reset_rate_pid_state()
+  {
+    reset_rate_integral();
+    reset_rate_derivative();
+  }
+
+  void update_rate_derivative(double dt)
+  {
+    double raw_derivative = 0.0;
+    if (has_previous_w_error_ && dt > 1e-6) {
+      raw_derivative = (last_w_error_ - previous_w_error_) / dt;
+    }
+
+    const double alpha = w_error_derivative_filter_tau_s_ <= 0.0 || dt <= 0.0 ?
+      1.0 : dt / (w_error_derivative_filter_tau_s_ + dt);
+    w_error_derivative_ += alpha * (raw_derivative - w_error_derivative_);
+    previous_w_error_ = last_w_error_;
+    has_previous_w_error_ = true;
+  }
+
   void reset_progress()
   {
     current_index_ = 0;
@@ -483,7 +517,7 @@ private:
     last_target_w_ = 0.0;
     last_cmd_w_ = 0.0;
     last_w_error_ = 0.0;
-    reset_rate_integral();
+    reset_rate_pid_state();
     last_control_time_ = now();
     last_target_ = path_.empty() ? Point{} : path_.front();
     status_reason_ = "reset";
@@ -506,10 +540,12 @@ private:
            << " speed=" << speed_m_s_
            << " k_w_rate=" << k_w_rate_
            << " k_i_rate=" << k_i_rate_
+           << " k_d_rate=" << k_d_rate_
            << " target_w=" << last_target_w_
            << " measured_w=" << measured_w_rad_s_
            << " w_error=" << last_w_error_
            << " w_error_integral=" << w_error_integral_
+           << " w_error_derivative=" << w_error_derivative_
            << " cmd_w=" << last_cmd_w_
            << " yaw_error=" << last_yaw_error_
            << " target=(" << last_target_.x << "," << last_target_.y << ")"
@@ -529,9 +565,11 @@ private:
   double waypoint_tolerance_m_{0.08};
   double goal_tolerance_m_{0.10};
   double k_w_{1.8};
-  double k_w_rate_{1.0};
-  double k_i_rate_{0.0};
+  double k_w_rate_{0.32};
+  double k_i_rate_{0.9};
+  double k_d_rate_{0.0};
   double w_error_integral_max_{0.5};
+  double w_error_derivative_filter_tau_s_{0.05};
   double w_max_rad_s_{0.6};
   double pose_timeout_s_{0.5};
   double angular_velocity_timeout_s_{0.35};
@@ -561,6 +599,9 @@ private:
   double last_cmd_w_{0.0};
   double last_w_error_{0.0};
   double w_error_integral_{0.0};
+  double w_error_derivative_{0.0};
+  double previous_w_error_{0.0};
+  bool has_previous_w_error_{false};
   std::string status_reason_{"idle"};
 
   rclcpp::Time last_status_time_{0, 0, RCL_ROS_TIME};

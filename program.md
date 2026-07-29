@@ -346,7 +346,8 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
   ```text
   w_error = target_w - measured_w
   w_i     = clamp(w_i + w_error * dt, -w_error_integral_max, w_error_integral_max)
-  cmd_w   = clamp(k_w_rate * w_error + k_i_rate * w_i, -w_max_rad_s, w_max_rad_s)
+  w_d     = low_pass((w_error - previous_w_error) / dt)
+  cmd_w   = clamp(k_w_rate * w_error + k_i_rate * w_i + k_d_rate * w_d, -w_max_rad_s, w_max_rad_s)
   ```
 
 - 输出 `linear.x=speed`，`angular.z=cmd_w`。
@@ -366,7 +367,8 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
 target_w + measured_w
   -> w_error
   -> w_i = integral(w_error)
-  -> angular.z = k_w_rate * w_error + k_i_rate * w_i
+  -> w_d = derivative(w_error)
+  -> angular.z = k_w_rate * w_error + k_i_rate * w_i + k_d_rate * w_d
   -> stm_bridge
   -> STM 左右轮速度环
 ```
@@ -398,9 +400,11 @@ ROS 接口：
 | `waypoint_tolerance_m` | `0.05` | 路径进度更新容差 |
 | `goal_tolerance_m` | `0.05` | 终点停车容差 |
 | `k_w` | `0.6` | 航向误差到角速度的比例系数 |
-| `k_w_rate` | `1.0` | 角速度误差到角速度指令的比例系数 |
-| `k_i_rate` | `0.0` | 角速度误差积分到角速度指令的比例系数，默认关闭积分 |
+| `k_w_rate` | `0.32` | 角速度误差到角速度指令的比例系数 |
+| `k_i_rate` | `0.9` | 角速度误差积分到角速度指令的比例系数 |
+| `k_d_rate` | `0.0` | 角速度误差导数到角速度指令的比例系数，默认关闭微分 |
 | `w_error_integral_max` | `0.5` | 角速度误差积分限幅，防止积分饱和 |
+| `w_error_derivative_filter_tau_s` | `0.05` | 角速度误差导数一阶低通时间常数 |
 | `w_max_rad_s` | `0.3` | 最大角速度 |
 | `pose_timeout_s` | `0.5` | `/car/pose` 超时时间，超时停车 |
 | `angular_velocity_timeout_s` | `0.35` | `/car/odom/carto` 角速度超时时间，超时退回角度外环 |
@@ -451,7 +455,8 @@ ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: stop
 ```text
 error = target_w - measured_w
 w_i   = clamp(w_i + error * dt, -w_error_integral_max, w_error_integral_max)
-cmd_w = clamp(k_w_rate * error + k_i_rate * w_i, -w_max_rad_s, w_max_rad_s)
+w_d   = low_pass((error - previous_error) / dt)
+cmd_w = clamp(k_w_rate * error + k_i_rate * w_i + k_d_rate * w_d, -w_max_rad_s, w_max_rad_s)
 linear.x = linear_speed_m_s
 ```
 
@@ -463,9 +468,11 @@ source install/setup.bash
 ros2 launch track_runner angular_rate_tuner.launch.py \
   linear_speed_m_s:=0.02 \
   target_w_rad_s:=0.2 \
-  k_w_rate:=1.0 \
-  k_i_rate:=0.0 \
+  k_w_rate:=0.32 \
+  k_i_rate:=0.9 \
+  k_d_rate:=0.0 \
   w_error_integral_max:=0.5 \
+  w_error_derivative_filter_tau_s:=0.05 \
   w_max_rad_s:=0.3
 ```
 
@@ -481,9 +488,11 @@ ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data
 ```bash
 ros2 topic pub --once /car/angular_rate_tuner/k_w_rate std_msgs/msg/Float64 "{data: 1.5}"
 ros2 topic pub --once /car/angular_rate_tuner/k_i_rate std_msgs/msg/Float64 "{data: 0.05}"
+ros2 topic pub --once /car/angular_rate_tuner/k_d_rate std_msgs/msg/Float64 "{data: 0.01}"
 ros2 topic pub --once /car/angular_rate_tuner/target_w std_msgs/msg/Float64 "{data: 0.2}"
 ros2 topic pub --once /car/angular_rate_tuner/speed std_msgs/msg/Float64 "{data: 0.02}"
 ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: reset_integral}"
+ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: reset_pid}"
 ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: reverse}"
 ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: stop}"
 ```
@@ -493,10 +502,12 @@ ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data
 ```text
 k_w_rate=...
 k_i_rate=...
+k_d_rate=...
 target_w=...
 measured_w=...
 w_error=...
 w_error_integral=...
+w_error_derivative=...
 cmd_w=...
 reason=running
 ```
@@ -507,10 +518,67 @@ reason=running
 - `measured_w` 超过 `target_w` 或来回振荡：减小 `k_w_rate`。
 - `k_w_rate` 已经比较稳但存在长期静差：小幅增大 `k_i_rate`，例如 `0.02 -> 0.05 -> 0.1`。
 - 加积分后出现慢速来回摆动或停止后拖尾明显：减小 `k_i_rate` 或降低 `w_error_integral_max`，并发送 `reset_integral`。
+- 角速度响应太钝、超调后回落慢：可小幅增加 `k_d_rate`，例如 `0.005 -> 0.01 -> 0.02`。
+- 加微分后 `cmd_w` 高频抖动：减小 `k_d_rate`，或增大 `w_error_derivative_filter_tau_s`，例如 `0.05 -> 0.10`。
 - `cmd_w` 经常等于 `±w_max_rad_s`：不要继续加 `k_w_rate`，先确认 `w_max_rad_s`、底盘能力和速度滤波。
 - `/car/odom/carto` 抖动明显：增大 `pose_velocity_filter_tau_s`，例如 `0.15 -> 0.25`。
 
-调好后，把最终 `k_w_rate` 和 `k_i_rate` 写回 `track_runner.launch.py` 或启动 `track_runner` 时传参。
+调好后，把最终 `k_w_rate`、`k_i_rate` 和 `k_d_rate` 写回 `track_runner.launch.py` 或启动 `track_runner` 时传参。
+
+### 3.5.2 `circle_angle_tuner`
+
+职责：
+
+- 单独调试角度外环，不跑完整操场路径。
+- 半径默认 `0.75 m`，收到 `start` 时以当前 `/car/pose` 为圆上起点生成圆心。
+- 角度外环按圆轨迹前瞻点计算 `target_yaw/yaw_error/target_w`。
+- 角速度内环沿用已调好的 PID 参数，发布 `/cmd_vel`。
+
+启动：
+
+```bash
+cd ~/flight_ws/car
+source install/setup.bash
+ros2 launch track_runner circle_angle_tuner.launch.py \
+  radius_m:=0.75 \
+  linear_speed_m_s:=0.02 \
+  lookahead_distance_m:=0.25 \
+  k_w:=0.4 \
+  k_w_rate:=0.32 \
+  k_i_rate:=0.9 \
+  k_d_rate:=0.0 \
+  w_max_rad_s:=0.3
+```
+
+开始、停止和反向：
+
+```bash
+ros2 topic pub --once /car/circle_angle_tuner/command std_msgs/msg/String "{data: start}"
+ros2 topic pub --once /car/circle_angle_tuner/command std_msgs/msg/String "{data: reverse}"
+ros2 topic pub --once /car/circle_angle_tuner/command std_msgs/msg/String "{data: stop}"
+```
+
+运行中调角度环：
+
+```bash
+ros2 topic pub --once /car/circle_angle_tuner/k_w std_msgs/msg/Float64 "{data: 0.5}"
+ros2 topic pub --once /car/circle_angle_tuner/lookahead std_msgs/msg/Float64 "{data: 0.30}"
+ros2 topic pub --once /car/circle_angle_tuner/speed std_msgs/msg/Float64 "{data: 0.02}"
+```
+
+记录角度和角速度：
+
+```bash
+python3 analyse/record_circle_angle.py --send-start --stop-on-exit
+```
+
+调参判断：
+
+- `yaw_error` 长时间偏同一侧，圆越跑越向外/向内：增大 `k_w`。
+- `yaw_error` 正负频繁切换，轨迹左右摆：减小 `k_w` 或增大 `lookahead_distance_m`。
+- 弯道明显切内侧、目标点太急：增大 `lookahead_distance_m`。
+- 弯道跟不上、圆半径越跑越大：减小 `lookahead_distance_m` 或增大 `k_w/w_max_rad_s`。
+- `target_w` 经常顶到 `w_max_rad_s`：角度环已经要满角速度，先不要继续加 `k_w`。
 
 ## 4. STM 串口通信接口冻结版 v1.1
 

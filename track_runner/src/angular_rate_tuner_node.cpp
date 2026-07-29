@@ -37,9 +37,12 @@ public:
   {
     linear_speed_m_s_ = declare_parameter<double>("linear_speed_m_s", 0.02);
     target_w_rad_s_ = declare_parameter<double>("target_w_rad_s", 0.2);
-    k_w_rate_ = declare_parameter<double>("k_w_rate", 1.0);
-    k_i_rate_ = declare_parameter<double>("k_i_rate", 0.0);
+    k_w_rate_ = declare_parameter<double>("k_w_rate", 0.32);
+    k_i_rate_ = declare_parameter<double>("k_i_rate", 0.9);
+    k_d_rate_ = declare_parameter<double>("k_d_rate", 0.0);
     w_error_integral_max_ = declare_parameter<double>("w_error_integral_max", 0.5);
+    w_error_derivative_filter_tau_s_ =
+      declare_parameter<double>("w_error_derivative_filter_tau_s", 0.05);
     w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.3);
     odom_timeout_s_ = declare_parameter<double>("odom_timeout_s", 0.35);
     publish_when_idle_ = declare_parameter<bool>("publish_when_idle", true);
@@ -57,14 +60,19 @@ public:
       declare_parameter<std::string>("k_w_rate_topic", "/car/angular_rate_tuner/k_w_rate");
     const auto k_i_rate_topic =
       declare_parameter<std::string>("k_i_rate_topic", "/car/angular_rate_tuner/k_i_rate");
+    const auto k_d_rate_topic =
+      declare_parameter<std::string>("k_d_rate_topic", "/car/angular_rate_tuner/k_d_rate");
     const auto status_topic =
       declare_parameter<std::string>("status_topic", "/car/angular_rate_tuner/status");
 
     linear_speed_m_s_ = sanitize_finite(linear_speed_m_s_, 0.02);
     target_w_rad_s_ = sanitize_finite(target_w_rad_s_, 0.2);
-    k_w_rate_ = std::max(0.0, sanitize_finite(k_w_rate_, 1.0));
-    k_i_rate_ = std::max(0.0, sanitize_finite(k_i_rate_, 0.0));
+    k_w_rate_ = std::max(0.0, sanitize_finite(k_w_rate_, 0.32));
+    k_i_rate_ = std::max(0.0, sanitize_finite(k_i_rate_, 0.9));
+    k_d_rate_ = std::max(0.0, sanitize_finite(k_d_rate_, 0.0));
     w_error_integral_max_ = std::max(0.0, sanitize_finite(w_error_integral_max_, 0.5));
+    w_error_derivative_filter_tau_s_ =
+      std::max(0.0, sanitize_finite(w_error_derivative_filter_tau_s_, 0.05));
     w_max_rad_s_ = std::max(0.0, sanitize_finite(w_max_rad_s_, 0.3));
     odom_timeout_s_ = std::max(0.02, sanitize_finite(odom_timeout_s_, 0.35));
 
@@ -87,6 +95,9 @@ public:
     k_i_rate_sub_ = create_subscription<std_msgs::msg::Float64>(
       k_i_rate_topic, 10,
       std::bind(&AngularRateTunerNode::on_k_i_rate, this, std::placeholders::_1));
+    k_d_rate_sub_ = create_subscription<std_msgs::msg::Float64>(
+      k_d_rate_topic, 10,
+      std::bind(&AngularRateTunerNode::on_k_d_rate, this, std::placeholders::_1));
 
     const double period_s = std::max(0.001, 1.0 / std::max(1.0, control_rate_hz));
     timer_ = create_wall_timer(
@@ -96,8 +107,8 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Angular rate tuner ready: v=%.3f m/s target_w=%.3f rad/s k_w_rate=%.3f k_i_rate=%.3f w_max=%.3f",
-      linear_speed_m_s_, target_w_rad_s_, k_w_rate_, k_i_rate_, w_max_rad_s_);
+      "Angular rate tuner ready: v=%.3f m/s target_w=%.3f rad/s k_w_rate=%.3f k_i_rate=%.3f k_d_rate=%.3f w_max=%.3f",
+      linear_speed_m_s_, target_w_rad_s_, k_w_rate_, k_i_rate_, k_d_rate_, w_max_rad_s_);
   }
 
 private:
@@ -113,24 +124,27 @@ private:
     const auto command = lower_copy(msg->data);
     if (command == "start") {
       running_ = true;
-      reset_integral();
+      reset_pid_state();
       last_control_time_ = now();
       status_reason_ = odom_is_fresh() ? "running" : "waiting_odom";
       RCLCPP_INFO(get_logger(), "Angular rate tuner started");
     } else if (command == "stop" || command == "pause") {
       running_ = false;
       last_w_error_ = 0.0;
-      reset_integral();
+      reset_pid_state();
       status_reason_ = "idle";
       publish_stop();
       RCLCPP_INFO(get_logger(), "Angular rate tuner stopped");
     } else if (command == "reverse") {
       target_w_rad_s_ = -target_w_rad_s_;
-      reset_integral();
+      reset_pid_state();
       RCLCPP_INFO(get_logger(), "Angular rate target reversed to %.3f rad/s", target_w_rad_s_);
     } else if (command == "reset_integral") {
       reset_integral();
       RCLCPP_INFO(get_logger(), "Angular rate integral reset");
+    } else if (command == "reset_pid") {
+      reset_pid_state();
+      RCLCPP_INFO(get_logger(), "Angular rate PID state reset");
     } else {
       RCLCPP_WARN(get_logger(), "Unknown angular rate tuner command: %s", msg->data.c_str());
     }
@@ -147,7 +161,7 @@ private:
   void on_target_w(const std_msgs::msg::Float64::SharedPtr msg)
   {
     target_w_rad_s_ = sanitize_finite(msg->data, target_w_rad_s_);
-    reset_integral();
+    reset_pid_state();
     RCLCPP_INFO(get_logger(), "Target angular velocity set to %.3f rad/s", target_w_rad_s_);
     publish_status();
   }
@@ -167,6 +181,14 @@ private:
     publish_status();
   }
 
+  void on_k_d_rate(const std_msgs::msg::Float64::SharedPtr msg)
+  {
+    k_d_rate_ = std::max(0.0, sanitize_finite(msg->data, k_d_rate_));
+    reset_derivative();
+    RCLCPP_INFO(get_logger(), "k_d_rate set to %.3f", k_d_rate_);
+    publish_status();
+  }
+
   void tick()
   {
     if (!running_) {
@@ -181,7 +203,7 @@ private:
 
     if (!odom_is_fresh()) {
       publish_stop();
-      reset_integral();
+      reset_pid_state();
       last_control_time_ = now();
       status_reason_ = "odom_unavailable";
       publish_status_throttled();
@@ -194,8 +216,10 @@ private:
     w_error_integral_ = std::clamp(
       w_error_integral_ + last_w_error_ * dt,
       -w_error_integral_max_, w_error_integral_max_);
+    update_derivative(dt);
     last_cmd_w_ = std::clamp(
-      k_w_rate_ * last_w_error_ + k_i_rate_ * w_error_integral_,
+      k_w_rate_ * last_w_error_ + k_i_rate_ * w_error_integral_ +
+        k_d_rate_ * w_error_derivative_,
       -w_max_rad_s_, w_max_rad_s_);
 
     geometry_msgs::msg::Twist twist;
@@ -233,6 +257,33 @@ private:
     w_error_integral_ = 0.0;
   }
 
+  void reset_derivative()
+  {
+    w_error_derivative_ = 0.0;
+    previous_w_error_ = 0.0;
+    has_previous_w_error_ = false;
+  }
+
+  void reset_pid_state()
+  {
+    reset_integral();
+    reset_derivative();
+  }
+
+  void update_derivative(double dt)
+  {
+    double raw_derivative = 0.0;
+    if (has_previous_w_error_ && dt > 1e-6) {
+      raw_derivative = (last_w_error_ - previous_w_error_) / dt;
+    }
+
+    const double alpha = w_error_derivative_filter_tau_s_ <= 0.0 || dt <= 0.0 ?
+      1.0 : dt / (w_error_derivative_filter_tau_s_ + dt);
+    w_error_derivative_ += alpha * (raw_derivative - w_error_derivative_);
+    previous_w_error_ = last_w_error_;
+    has_previous_w_error_ = true;
+  }
+
   void publish_status_throttled()
   {
     const auto stamp = now();
@@ -249,11 +300,13 @@ private:
     stream << "running=" << (running_ ? "true" : "false")
            << " k_w_rate=" << k_w_rate_
            << " k_i_rate=" << k_i_rate_
+           << " k_d_rate=" << k_d_rate_
            << " speed=" << linear_speed_m_s_
            << " target_w=" << target_w_rad_s_
            << " measured_w=" << measured_w_rad_s_
            << " w_error=" << last_w_error_
            << " w_error_integral=" << w_error_integral_
+           << " w_error_derivative=" << w_error_derivative_
            << " cmd_w=" << last_cmd_w_
            << " w_max=" << w_max_rad_s_
            << " odom_fresh=" << (odom_is_fresh() ? "true" : "false")
@@ -264,9 +317,11 @@ private:
 
   double linear_speed_m_s_{0.02};
   double target_w_rad_s_{0.2};
-  double k_w_rate_{1.0};
-  double k_i_rate_{0.0};
+  double k_w_rate_{0.32};
+  double k_i_rate_{0.9};
+  double k_d_rate_{0.0};
   double w_error_integral_max_{0.5};
+  double w_error_derivative_filter_tau_s_{0.05};
   double w_max_rad_s_{0.3};
   double odom_timeout_s_{0.35};
   bool publish_when_idle_{true};
@@ -276,6 +331,9 @@ private:
   double measured_w_rad_s_{0.0};
   double last_w_error_{0.0};
   double w_error_integral_{0.0};
+  double w_error_derivative_{0.0};
+  double previous_w_error_{0.0};
+  bool has_previous_w_error_{false};
   double last_cmd_w_{0.0};
   std::string status_reason_{"idle"};
   rclcpp::Time last_odom_time_{0, 0, RCL_ROS_TIME};
@@ -291,6 +349,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr target_w_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr k_w_rate_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr k_i_rate_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr k_d_rate_sub_;
 };
 
 int main(int argc, char ** argv)

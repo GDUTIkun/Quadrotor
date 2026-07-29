@@ -53,7 +53,7 @@ The CSV and PNG tracking plot are written under `analyse/log/` by default. Usefu
 
 - `target_w_rad_s`: target angular velocity from `/car/angular_rate_tuner/status`.
 - `current_w_rad_s`: measured angular velocity, using status first and `/car/odom/carto` as fallback.
-- `cmd_w_rad_s`, `w_error_rad_s`, `w_error_integral_rad`, `k_w_rate`, `k_i_rate`: angular-rate tuner command and PI gain data.
+- `cmd_w_rad_s`, `w_error_rad_s`, `w_error_integral_rad`, `w_error_derivative_rad_s2`, `k_w_rate`, `k_i_rate`, `k_d_rate`: angular-rate tuner command and PID gain data.
 
 Plot an existing angular-rate CSV:
 
@@ -65,4 +65,24 @@ Disable automatic plotting while recording:
 
 ```bash
 python3 analyse/record_angular_rate.py --no-plot
+```
+
+Record 0.75 m circle angle-loop target/current yaw and angular velocity:
+
+```bash
+cd ~/flight_ws/car
+source install/setup.bash
+python3 analyse/record_circle_angle.py --send-start --stop-on-exit
+```
+
+The CSV and PNG tracking plot are written under `analyse/log/` by default. Useful columns:
+
+- `pose_yaw_rad`, `target_yaw_rad`, `yaw_error_rad`: angle-loop tracking data.
+- `target_w_rad_s`, `measured_w_rad_s`, `cmd_w_rad_s`: angular-rate inner-loop data.
+- `k_w`, `k_w_rate`, `k_i_rate`, `k_d_rate`, `lookahead_m`: active tuning parameters.
+
+Plot an existing circle-angle CSV:
+
+```bash
+python3 analyse/record_circle_angle.py --plot-only analyse/log/circle_angle_YYYYMMDD_HHMMSS.csv
 ```
