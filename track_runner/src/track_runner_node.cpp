@@ -97,7 +97,10 @@ public:
     waypoint_tolerance_m_ = declare_parameter<double>("waypoint_tolerance_m", 0.08);
     goal_tolerance_m_ = declare_parameter<double>("goal_tolerance_m", 0.10);
     k_w_ = declare_parameter<double>("k_w", 0.6);
-    k_w_ff_ = declare_parameter<double>("k_w_ff", 1.0);
+    k_w_ff_speed_intercept_ = declare_parameter<double>("k_w_ff_speed_intercept", 5.0);
+    k_w_ff_speed_slope_ = declare_parameter<double>("k_w_ff_speed_slope", -100.0);
+    k_w_ff_min_ = declare_parameter<double>("k_w_ff_min", 0.0);
+    k_w_ff_max_ = declare_parameter<double>("k_w_ff_max", 10.0);
     k_w_rate_ = declare_parameter<double>("k_w_rate", 0.32);
     k_i_rate_ = declare_parameter<double>("k_i_rate", 0.9);
     k_d_rate_ = declare_parameter<double>("k_d_rate", 0.0);
@@ -132,7 +135,8 @@ public:
     lookahead_distance_m_ = std::max(0.01, lookahead_distance_m_);
     waypoint_tolerance_m_ = std::max(0.01, waypoint_tolerance_m_);
     goal_tolerance_m_ = std::max(0.01, goal_tolerance_m_);
-    k_w_ff_ = std::max(0.0, k_w_ff_);
+    k_w_ff_min_ = std::max(0.0, k_w_ff_min_);
+    k_w_ff_max_ = std::max(k_w_ff_min_, k_w_ff_max_);
     k_w_rate_ = std::max(0.0, k_w_rate_);
     k_i_rate_ = std::max(0.0, k_i_rate_);
     k_d_rate_ = std::max(0.0, k_d_rate_);
@@ -481,7 +485,14 @@ private:
     if (!on_arc) {
       return 0.0;
     }
-    return -k_w_ff_ * speed_m_s_ / radius_m_;
+    return -k_w_ff_for_speed(speed_m_s_) * speed_m_s_ / radius_m_;
+  }
+
+  double k_w_ff_for_speed(double speed) const
+  {
+    return std::clamp(
+      k_w_ff_speed_intercept_ + k_w_ff_speed_slope_ * speed,
+      k_w_ff_min_, k_w_ff_max_);
   }
 
   void publish_stop()
@@ -564,7 +575,9 @@ private:
            << " progress=" << total_progress_m_
            << " speed=" << speed_m_s_
            << " k_w=" << k_w_
-           << " k_w_ff=" << k_w_ff_
+           << " k_w_ff=" << k_w_ff_for_speed(speed_m_s_)
+           << " k_w_ff_speed_intercept=" << k_w_ff_speed_intercept_
+           << " k_w_ff_speed_slope=" << k_w_ff_speed_slope_
            << " k_w_rate=" << k_w_rate_
            << " k_i_rate=" << k_i_rate_
            << " k_d_rate=" << k_d_rate_
@@ -593,7 +606,10 @@ private:
   double waypoint_tolerance_m_{0.08};
   double goal_tolerance_m_{0.10};
   double k_w_{0.6};
-  double k_w_ff_{1.0};
+  double k_w_ff_speed_intercept_{5.0};
+  double k_w_ff_speed_slope_{-100.0};
+  double k_w_ff_min_{0.0};
+  double k_w_ff_max_{10.0};
   double k_w_rate_{0.32};
   double k_i_rate_{0.9};
   double k_d_rate_{0.0};

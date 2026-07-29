@@ -336,12 +336,15 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
   yaw_error  = normalize(target_yaw - pose.yaw)
   ```
 
-- 角度外环输出期望角速度。操场半圆段加入几何前馈角速度，直线段前馈为 0：
+- 角度外环输出期望角速度。操场半圆段加入几何前馈角速度，直线段前馈为 0。前馈系数按线速度线性变化：
 
   ```text
-  yaw_rate_ff = speed / radius * direction
+  k_w_ff     = clamp(5.0 - 100.0 * speed, 0.0, 10.0)
+  yaw_rate_ff = k_w_ff * speed / radius * direction
   target_w    = clamp(yaw_rate_ff + k_w * yaw_error, -w_max_rad_s, w_max_rad_s)
   ```
+
+- 当前默认关系：`speed=0.01 -> k_w_ff=4.0`，`speed=0.02 -> k_w_ff=3.0`，`speed=0.03 -> k_w_ff=2.0`。
 
 - 角速度内环用 `/car/odom/carto.twist.twist.angular.z` 做反馈：
 
@@ -402,7 +405,10 @@ ROS 接口：
 | `waypoint_tolerance_m` | `0.05` | 路径进度更新容差 |
 | `goal_tolerance_m` | `0.05` | 终点停车容差 |
 | `k_w` | `0.6` | 航向误差到角速度的比例系数 |
-| `k_w_ff` | `1.0` | 半圆段角速度几何前馈比例，0 表示关闭前馈 |
+| `k_w_ff_speed_intercept` | `5.0` | 线速度到前馈系数的截距 |
+| `k_w_ff_speed_slope` | `-100.0` | 线速度到前馈系数的斜率 |
+| `k_w_ff_min` | `0.0` | 自动前馈系数下限 |
+| `k_w_ff_max` | `10.0` | 自动前馈系数上限 |
 | `k_w_rate` | `0.32` | 角速度误差到角速度指令的比例系数 |
 | `k_i_rate` | `0.9` | 角速度误差积分到角速度指令的比例系数 |
 | `k_d_rate` | `0.0` | 角速度误差导数到角速度指令的比例系数，默认关闭微分 |
@@ -535,7 +541,7 @@ reason=running
 - 单独调试角度外环，不跑完整操场路径。
 - 半径默认 `0.75 m`，收到 `start` 时以当前 `/car/pose` 为圆上起点生成圆心。
 - target 点由内部连续参考圆进度生成，不直接用 noisy pose 投影点逐帧重算，因此 `target_x/target_y` 是光滑圆。
-- 角度外环按圆轨迹前瞻点计算 `target_yaw/yaw_error/target_w`，并加入圆周几何角速度前馈 `yaw_rate_ff = k_w_ff * direction * speed / radius`。
+- 角度外环按圆轨迹前瞻点计算 `target_yaw/yaw_error/target_w`，并加入圆周几何角速度前馈 `yaw_rate_ff = k_w_ff(speed) * direction * speed / radius`。
 - 角速度内环沿用已调好的 PID 参数，发布 `/cmd_vel`。
 
 启动：
@@ -548,7 +554,8 @@ ros2 launch track_runner circle_angle_tuner.launch.py \
   linear_speed_m_s:=0.03 \
   lookahead_distance_m:=0.25 \
   k_w:=0.6 \
-  k_w_ff:=1.0 \
+  k_w_ff_speed_intercept:=5.0 \
+  k_w_ff_speed_slope:=-100.0 \
   k_w_rate:=0.32 \
   k_i_rate:=0.9 \
   k_d_rate:=0.0 \
@@ -567,7 +574,6 @@ ros2 topic pub --once /car/circle_angle_tuner/command std_msgs/msg/String "{data
 
 ```bash
 ros2 topic pub --once /car/circle_angle_tuner/k_w std_msgs/msg/Float64 "{data: 0.5}"
-ros2 topic pub --once /car/circle_angle_tuner/k_w_ff std_msgs/msg/Float64 "{data: 1.0}"
 ros2 topic pub --once /car/circle_angle_tuner/lookahead std_msgs/msg/Float64 "{data: 0.30}"
 ros2 topic pub --once /car/circle_angle_tuner/speed std_msgs/msg/Float64 "{data: 0.02}"
 ```

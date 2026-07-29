@@ -6,6 +6,7 @@ import csv
 import math
 import re
 import signal
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,10 @@ import rclpy
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from std_msgs.msg import String
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 from plot_xy import plot_xy
 
@@ -24,10 +29,19 @@ STATUS_RE = {
     "reason": re.compile(r"\breason=([^\s]+)"),
     "target": re.compile(r"\btarget=\(([-+0-9.eE]+),([-+0-9.eE]+)\)"),
     "status_pose": re.compile(r"\bpose=\(([-+0-9.eE]+),([-+0-9.eE]+),([-+0-9.eE]+)\)"),
+    "k_w": re.compile(r"\bk_w=([-+0-9.eE]+)"),
+    "k_w_ff": re.compile(r"\bk_w_ff=([-+0-9.eE]+)"),
+    "k_w_rate": re.compile(r"\bk_w_rate=([-+0-9.eE]+)"),
+    "k_i_rate": re.compile(r"\bk_i_rate=([-+0-9.eE]+)"),
+    "k_d_rate": re.compile(r"\bk_d_rate=([-+0-9.eE]+)"),
     "target_w": re.compile(r"\btarget_w=([-+0-9.eE]+)"),
     "yaw_rate_ff": re.compile(r"\byaw_rate_ff=([-+0-9.eE]+)"),
     "measured_w": re.compile(r"\bmeasured_w=([-+0-9.eE]+)"),
+    "w_error": re.compile(r"\bw_error=([-+0-9.eE]+)"),
+    "w_error_integral": re.compile(r"\bw_error_integral=([-+0-9.eE]+)"),
+    "w_error_derivative": re.compile(r"\bw_error_derivative=([-+0-9.eE]+)"),
     "cmd_w": re.compile(r"\bcmd_w=([-+0-9.eE]+)"),
+    "w_max": re.compile(r"\bw_max=([-+0-9.eE]+)"),
     "yaw_error": re.compile(r"\byaw_error=([-+0-9.eE]+)"),
 }
 
@@ -43,6 +57,15 @@ def float_or_blank(value):
     if value is None:
         return ""
     return f"{value:.9g}"
+
+
+def to_float(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 def parse_status(text):
@@ -63,11 +86,151 @@ def parse_status(text):
         parsed["status_pose_y"] = float(match.group(2))
         parsed["status_pose_yaw"] = float(match.group(3))
 
-    for key in ("target_w", "yaw_rate_ff", "measured_w", "cmd_w", "yaw_error"):
+    for key in (
+        "k_w",
+        "k_w_ff",
+        "k_w_rate",
+        "k_i_rate",
+        "k_d_rate",
+        "target_w",
+        "yaw_rate_ff",
+        "measured_w",
+        "w_error",
+        "w_error_integral",
+        "w_error_derivative",
+        "cmd_w",
+        "w_max",
+        "yaw_error",
+    ):
         match = STATUS_RE[key].search(text)
         if match:
             parsed[key] = float(match.group(1))
     return parsed
+
+
+def resolve_rate_plot_output(csv_path, output):
+    csv_path = Path(csv_path).expanduser()
+    if not output:
+        return csv_path.with_name(f"{csv_path.stem}_rate.png")
+    output_path = Path(output).expanduser()
+    if output_path.is_dir() or str(output).endswith("/"):
+        return output_path / f"{csv_path.stem}_rate.png"
+    return output_path.with_name(f"{output_path.stem}_rate{output_path.suffix or '.png'}")
+
+
+def plot_angular_rate_tracking(csv_path, output=""):
+    csv_path = Path(csv_path).expanduser()
+    output_path = resolve_rate_plot_output(csv_path, output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with csv_path.open(newline="", encoding="utf-8") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+
+    samples = []
+    for row in rows:
+        time_s = to_float(row.get("time_s"))
+        target_w = to_float(row.get("target_w_rad_s"))
+        measured_w = to_float(row.get("measured_w_rad_s"))
+        if time_s is None or target_w is None or measured_w is None:
+            continue
+        w_error = to_float(row.get("w_error_rad_s"))
+        if w_error is None:
+            w_error = target_w - measured_w
+        samples.append({
+            "time_s": time_s,
+            "target_w": target_w,
+            "yaw_rate_ff": to_float(row.get("yaw_rate_ff_rad_s")),
+            "measured_w": measured_w,
+            "cmd_w": to_float(row.get("cmd_w_rad_s")),
+            "w_error": w_error,
+            "w_error_integral": to_float(row.get("w_error_integral_rad")),
+            "w_error_derivative": to_float(row.get("w_error_derivative_rad_s2")),
+            "yaw_error": to_float(row.get("yaw_error_rad")),
+            "k_w": to_float(row.get("k_w")),
+            "k_w_ff": to_float(row.get("k_w_ff")),
+            "k_w_rate": to_float(row.get("k_w_rate")),
+            "k_i_rate": to_float(row.get("k_i_rate")),
+            "k_d_rate": to_float(row.get("k_d_rate")),
+        })
+
+    if not samples:
+        raise RuntimeError(f"No plottable angular-rate samples in {csv_path}")
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    times = [sample["time_s"] for sample in samples]
+    target_w = [sample["target_w"] for sample in samples]
+    yaw_rate_ff = [sample["yaw_rate_ff"] for sample in samples]
+    measured_w = [sample["measured_w"] for sample in samples]
+    cmd_w = [sample["cmd_w"] for sample in samples]
+    w_error = [sample["w_error"] for sample in samples]
+    w_error_integral = [sample["w_error_integral"] for sample in samples]
+    w_error_derivative = [sample["w_error_derivative"] for sample in samples]
+    yaw_error = [sample["yaw_error"] for sample in samples]
+    k_w = [sample["k_w"] for sample in samples]
+    k_w_ff = [sample["k_w_ff"] for sample in samples]
+    k_w_rate = [sample["k_w_rate"] for sample in samples]
+    k_i_rate = [sample["k_i_rate"] for sample in samples]
+    k_d_rate = [sample["k_d_rate"] for sample in samples]
+
+    fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True)
+    fig.suptitle(f"Angular Rate Tracking: {csv_path.name}")
+
+    axes[0].plot(times, target_w, label="target_w", linewidth=1.7)
+    if any(value is not None for value in yaw_rate_ff):
+        axes[0].plot(times, yaw_rate_ff, label="yaw_rate_ff", linewidth=1.1)
+    axes[0].plot(times, measured_w, label="measured_w", linewidth=1.5)
+    if any(value is not None for value in cmd_w):
+        axes[0].plot(times, cmd_w, label="cmd_w", linewidth=1.1)
+    axes[0].set_ylabel("w (rad/s)")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend(loc="best")
+
+    axes[1].plot(times, w_error, label="w_error", color="tab:red", linewidth=1.4)
+    axes[1].axhline(0.0, color="black", linewidth=0.8, alpha=0.5)
+    axes[1].set_ylabel("w error")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend(loc="best")
+
+    has_pid_trace = False
+    if any(value is not None for value in w_error_integral):
+        axes[2].plot(times, w_error_integral, label="w_error_integral", linewidth=1.2)
+        has_pid_trace = True
+    if any(value is not None for value in w_error_derivative):
+        axes[2].plot(times, w_error_derivative, label="w_error_derivative", linewidth=1.0)
+        has_pid_trace = True
+    if any(value is not None for value in yaw_error):
+        axes[2].plot(times, yaw_error, label="yaw_error", linewidth=1.2)
+        has_pid_trace = True
+    axes[2].axhline(0.0, color="black", linewidth=0.8, alpha=0.5)
+    axes[2].set_ylabel("pid/yaw")
+    axes[2].grid(True, alpha=0.3)
+    if has_pid_trace:
+        axes[2].legend(loc="best")
+
+    has_gain_trace = False
+    for values, label in (
+        (k_w, "k_w"),
+        (k_w_ff, "k_w_ff"),
+        (k_w_rate, "k_w_rate"),
+        (k_i_rate, "k_i_rate"),
+        (k_d_rate, "k_d_rate"),
+    ):
+        if any(value is not None for value in values):
+            axes[3].plot(times, values, label=label, linewidth=1.2)
+            has_gain_trace = True
+    axes[3].set_ylabel("gain")
+    axes[3].set_xlabel("time (s)")
+    axes[3].grid(True, alpha=0.3)
+    if has_gain_trace:
+        axes[3].legend(loc="best")
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+    return output_path, len(samples)
 
 
 class XYRecorder(Node):
@@ -119,11 +282,20 @@ class XYRecorder(Node):
             "state",
             "running",
             "reason",
+            "k_w",
+            "k_w_ff",
+            "k_w_rate",
+            "k_i_rate",
+            "k_d_rate",
             "yaw_error_rad",
             "target_w_rad_s",
             "yaw_rate_ff_rad_s",
             "measured_w_rad_s",
+            "w_error_rad_s",
+            "w_error_integral_rad",
+            "w_error_derivative_rad_s2",
             "cmd_w_rad_s",
+            "w_max_rad_s",
             "status_raw",
         ]
 
@@ -194,11 +366,20 @@ class XYRecorder(Node):
             "state": status.get("state", ""),
             "running": status.get("running", ""),
             "reason": status.get("reason", ""),
+            "k_w": float_or_blank(status.get("k_w")),
+            "k_w_ff": float_or_blank(status.get("k_w_ff")),
+            "k_w_rate": float_or_blank(status.get("k_w_rate")),
+            "k_i_rate": float_or_blank(status.get("k_i_rate")),
+            "k_d_rate": float_or_blank(status.get("k_d_rate")),
             "yaw_error_rad": float_or_blank(status.get("yaw_error")),
             "target_w_rad_s": float_or_blank(status.get("target_w")),
             "yaw_rate_ff_rad_s": float_or_blank(status.get("yaw_rate_ff")),
             "measured_w_rad_s": float_or_blank(status.get("measured_w")),
+            "w_error_rad_s": float_or_blank(status.get("w_error")),
+            "w_error_integral_rad": float_or_blank(status.get("w_error_integral")),
+            "w_error_derivative_rad_s2": float_or_blank(status.get("w_error_derivative")),
             "cmd_w_rad_s": float_or_blank(status.get("cmd_w")),
+            "w_max_rad_s": float_or_blank(status.get("w_max")),
             "status_raw": status.get("status_raw", ""),
         }
         self.writer.writerow(row)
@@ -293,7 +474,15 @@ def main():
             target_point_size=args.target_point_size,
             pose_point_size=args.pose_point_size,
         )
-        print(f"  plot: {output_path} pose_points={pose_count} target_points={target_count}")
+        print(f"  xy plot: {output_path} pose_points={pose_count} target_points={target_count}")
+        try:
+            rate_output_path, rate_count = plot_angular_rate_tracking(
+                summary["output_path"],
+                output=args.plot_output,
+            )
+            print(f"  rate plot: {rate_output_path} samples={rate_count}")
+        except RuntimeError as exc:
+            print(f"  rate plot skipped: {exc}")
 
 
 if __name__ == "__main__":
