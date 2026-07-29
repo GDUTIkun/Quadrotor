@@ -394,7 +394,7 @@ ROS 接口：
 | `straight_length_m` | `1.5` | 直线段长度 |
 | `radius_m` | `0.75` | 半圆半径 |
 | `path_spacing_m` | `0.02` | 航线路径点间距 |
-| `default_speed_m_s` | `0.01` | 默认线速度 |
+| `default_speed_m_s` | `0.03` | 默认线速度 |
 | `default_laps` | `1` | 默认圈数 |
 | `lookahead_distance_m` | `0.25` | 前瞻目标点距离 |
 | `waypoint_tolerance_m` | `0.05` | 路径进度更新容差 |
@@ -405,7 +405,7 @@ ROS 接口：
 | `k_d_rate` | `0.0` | 角速度误差导数到角速度指令的比例系数，默认关闭微分 |
 | `w_error_integral_max` | `0.5` | 角速度误差积分限幅，防止积分饱和 |
 | `w_error_derivative_filter_tau_s` | `0.05` | 角速度误差导数一阶低通时间常数 |
-| `w_max_rad_s` | `0.3` | 最大角速度 |
+| `w_max_rad_s` | `0.8` | 最大角速度 |
 | `pose_timeout_s` | `0.5` | `/car/pose` 超时时间，超时停车 |
 | `angular_velocity_timeout_s` | `0.35` | `/car/odom/carto` 角速度超时时间，超时退回角度外环 |
 | `use_angular_velocity_feedback` | `true` | 是否启用角速度内环 |

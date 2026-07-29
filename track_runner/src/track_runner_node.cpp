@@ -91,19 +91,19 @@ public:
     straight_length_m_ = declare_parameter<double>("straight_length_m", 1.5);
     radius_m_ = declare_parameter<double>("radius_m", 0.75);
     path_spacing_m_ = declare_parameter<double>("path_spacing_m", 0.03);
-    speed_m_s_ = declare_parameter<double>("default_speed_m_s", 0.02);
+    speed_m_s_ = declare_parameter<double>("default_speed_m_s", 0.03);
     target_laps_ = declare_parameter<int>("default_laps", 1);
     lookahead_distance_m_ = declare_parameter<double>("lookahead_distance_m", 0.25);
     waypoint_tolerance_m_ = declare_parameter<double>("waypoint_tolerance_m", 0.08);
     goal_tolerance_m_ = declare_parameter<double>("goal_tolerance_m", 0.10);
-    k_w_ = declare_parameter<double>("k_w", 1.8);
+    k_w_ = declare_parameter<double>("k_w", 0.6);
     k_w_rate_ = declare_parameter<double>("k_w_rate", 0.32);
     k_i_rate_ = declare_parameter<double>("k_i_rate", 0.9);
     k_d_rate_ = declare_parameter<double>("k_d_rate", 0.0);
     w_error_integral_max_ = declare_parameter<double>("w_error_integral_max", 0.5);
     w_error_derivative_filter_tau_s_ =
       declare_parameter<double>("w_error_derivative_filter_tau_s", 0.05);
-    w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.6);
+    w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.8);
     pose_timeout_s_ = declare_parameter<double>("pose_timeout_s", 0.5);
     angular_velocity_timeout_s_ = declare_parameter<double>("angular_velocity_timeout_s", 0.35);
     use_angular_velocity_feedback_ =
@@ -172,7 +172,7 @@ private:
   double sanitize_speed(double speed) const
   {
     if (!std::isfinite(speed)) {
-      return 0.02;
+      return 0.03;
     }
     return std::max(0.0, speed);
   }
@@ -559,18 +559,18 @@ private:
   double straight_length_m_{1.5};
   double radius_m_{0.75};
   double path_spacing_m_{0.03};
-  double speed_m_s_{0.02};
+  double speed_m_s_{0.03};
   int target_laps_{1};
   double lookahead_distance_m_{0.25};
   double waypoint_tolerance_m_{0.08};
   double goal_tolerance_m_{0.10};
-  double k_w_{1.8};
+  double k_w_{0.6};
   double k_w_rate_{0.32};
   double k_i_rate_{0.9};
   double k_d_rate_{0.0};
   double w_error_integral_max_{0.5};
   double w_error_derivative_filter_tau_s_{0.05};
-  double w_max_rad_s_{0.6};
+  double w_max_rad_s_{0.8};
   double pose_timeout_s_{0.5};
   double angular_velocity_timeout_s_{0.35};
   bool use_angular_velocity_feedback_{true};
