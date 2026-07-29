@@ -18,10 +18,12 @@ from std_msgs.msg import String
 STATUS_RE = {
     "running": re.compile(r"\brunning=([^\s]+)"),
     "k_w_rate": re.compile(r"\bk_w_rate=([-+0-9.eE]+)"),
+    "k_i_rate": re.compile(r"\bk_i_rate=([-+0-9.eE]+)"),
     "speed": re.compile(r"\bspeed=([-+0-9.eE]+)"),
     "target_w": re.compile(r"\btarget_w=([-+0-9.eE]+)"),
     "measured_w": re.compile(r"\bmeasured_w=([-+0-9.eE]+)"),
     "w_error": re.compile(r"\bw_error=([-+0-9.eE]+)"),
+    "w_error_integral": re.compile(r"\bw_error_integral=([-+0-9.eE]+)"),
     "cmd_w": re.compile(r"\bcmd_w=([-+0-9.eE]+)"),
     "w_max": re.compile(r"\bw_max=([-+0-9.eE]+)"),
     "odom_fresh": re.compile(r"\bodom_fresh=([^\s]+)"),
@@ -91,6 +93,8 @@ def plot_angular_rate_csv(csv_path, plot_output=None):
             "w_error": to_float(row.get("w_error_rad_s")),
             "cmd_w": to_float(row.get("cmd_w_rad_s")),
             "k_w_rate": to_float(row.get("k_w_rate")),
+            "k_i_rate": to_float(row.get("k_i_rate")),
+            "w_error_integral": to_float(row.get("w_error_integral_rad")),
             "reason": row.get("reason", ""),
         })
 
@@ -110,9 +114,11 @@ def plot_angular_rate_csv(csv_path, plot_output=None):
         for sample in samples
     ]
     cmd = [sample["cmd_w"] for sample in samples]
-    gain = [sample["k_w_rate"] for sample in samples]
+    k_w_rate = [sample["k_w_rate"] for sample in samples]
+    k_i_rate = [sample["k_i_rate"] for sample in samples]
+    error_integral = [sample["w_error_integral"] for sample in samples]
 
-    fig, axes = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True)
     fig.suptitle(f"Angular Rate Tracking: {csv_path.name}")
 
     axes[0].plot(times, target, label="target_w", linewidth=1.8)
@@ -129,12 +135,23 @@ def plot_angular_rate_csv(csv_path, plot_output=None):
     axes[1].grid(True, alpha=0.3)
     axes[1].legend(loc="best")
 
-    if any(value is not None for value in gain):
-        axes[2].plot(times, gain, label="k_w_rate", color="tab:purple", linewidth=1.5)
+    if any(value is not None for value in error_integral):
+        axes[2].plot(
+            times, error_integral, label="error_integral", color="tab:orange", linewidth=1.5
+        )
         axes[2].legend(loc="best")
-    axes[2].set_ylabel("gain")
-    axes[2].set_xlabel("time (s)")
+    axes[2].axhline(0.0, color="black", linewidth=0.8, alpha=0.5)
+    axes[2].set_ylabel("integral (rad)")
     axes[2].grid(True, alpha=0.3)
+
+    if any(value is not None for value in k_w_rate):
+        axes[3].plot(times, k_w_rate, label="k_w_rate", color="tab:purple", linewidth=1.5)
+    if any(value is not None for value in k_i_rate):
+        axes[3].plot(times, k_i_rate, label="k_i_rate", color="tab:brown", linewidth=1.5)
+    axes[3].set_ylabel("gain")
+    axes[3].set_xlabel("time (s)")
+    axes[3].grid(True, alpha=0.3)
+    axes[3].legend(loc="best")
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
@@ -187,11 +204,13 @@ class AngularRateRecorder(Node):
             "odom_age_s",
             "running",
             "k_w_rate",
+            "k_i_rate",
             "linear_speed_m_s",
             "target_w_rad_s",
             "current_w_rad_s",
             "odom_current_w_rad_s",
             "w_error_rad_s",
+            "w_error_integral_rad",
             "cmd_w_rad_s",
             "w_max_rad_s",
             "odom_fresh",
@@ -258,11 +277,13 @@ class AngularRateRecorder(Node):
             "odom_age_s": float_or_blank(self.age_seconds(odom, now)),
             "running": status.get("running") or "",
             "k_w_rate": float_or_blank(status.get("k_w_rate")),
+            "k_i_rate": float_or_blank(status.get("k_i_rate")),
             "linear_speed_m_s": float_or_blank(status.get("speed")),
             "target_w_rad_s": float_or_blank(status.get("target_w")),
             "current_w_rad_s": float_or_blank(current_w),
             "odom_current_w_rad_s": float_or_blank(odom.get("current_w")),
             "w_error_rad_s": float_or_blank(status.get("w_error")),
+            "w_error_integral_rad": float_or_blank(status.get("w_error_integral")),
             "cmd_w_rad_s": float_or_blank(status.get("cmd_w")),
             "w_max_rad_s": float_or_blank(status.get("w_max")),
             "odom_fresh": status.get("odom_fresh") or "",
@@ -283,14 +304,17 @@ class AngularRateRecorder(Node):
         cmd_w = status.get("cmd_w")
         cmd_text = "-" if cmd_w is None else f"{cmd_w:.3f}"
         k_w_rate = status.get("k_w_rate")
-        gain_text = "-" if k_w_rate is None else f"{k_w_rate:.3f}"
+        kp_text = "-" if k_w_rate is None else f"{k_w_rate:.3f}"
+        k_i_rate = status.get("k_i_rate")
+        ki_text = "-" if k_i_rate is None else f"{k_i_rate:.3f}"
         self.get_logger().info(
             "recording "
             f"{self.output_path} | "
             f"target_w={target_text} "
             f"current_w={current_text} "
             f"cmd_w={cmd_text} "
-            f"k_w_rate={gain_text} "
+            f"k_w_rate={kp_text} "
+            f"k_i_rate={ki_text} "
             f"reason={status.get('reason') or '-'}"
         )
 

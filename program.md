@@ -345,7 +345,8 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
 
   ```text
   w_error = target_w - measured_w
-  cmd_w   = clamp(k_w_rate * w_error, -w_max_rad_s, w_max_rad_s)
+  w_i     = clamp(w_i + w_error * dt, -w_error_integral_max, w_error_integral_max)
+  cmd_w   = clamp(k_w_rate * w_error + k_i_rate * w_i, -w_max_rad_s, w_max_rad_s)
   ```
 
 - 输出 `linear.x=speed`，`angular.z=cmd_w`。
@@ -364,7 +365,8 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
   -> measured_w
 target_w + measured_w
   -> w_error
-  -> angular.z = k_w_rate * w_error
+  -> w_i = integral(w_error)
+  -> angular.z = k_w_rate * w_error + k_i_rate * w_i
   -> stm_bridge
   -> STM 左右轮速度环
 ```
@@ -397,6 +399,8 @@ ROS 接口：
 | `goal_tolerance_m` | `0.05` | 终点停车容差 |
 | `k_w` | `0.6` | 航向误差到角速度的比例系数 |
 | `k_w_rate` | `1.0` | 角速度误差到角速度指令的比例系数 |
+| `k_i_rate` | `0.0` | 角速度误差积分到角速度指令的比例系数，默认关闭积分 |
+| `w_error_integral_max` | `0.5` | 角速度误差积分限幅，防止积分饱和 |
 | `w_max_rad_s` | `0.3` | 最大角速度 |
 | `pose_timeout_s` | `0.5` | `/car/pose` 超时时间，超时停车 |
 | `angular_velocity_timeout_s` | `0.35` | `/car/odom/carto` 角速度超时时间，超时退回角度外环 |
@@ -445,7 +449,9 @@ ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: stop
 - 发布 `/cmd_vel`，命令形式为：
 
 ```text
-cmd_w = clamp(k_w_rate * (target_w - measured_w), -w_max_rad_s, w_max_rad_s)
+error = target_w - measured_w
+w_i   = clamp(w_i + error * dt, -w_error_integral_max, w_error_integral_max)
+cmd_w = clamp(k_w_rate * error + k_i_rate * w_i, -w_max_rad_s, w_max_rad_s)
 linear.x = linear_speed_m_s
 ```
 
@@ -458,6 +464,8 @@ ros2 launch track_runner angular_rate_tuner.launch.py \
   linear_speed_m_s:=0.02 \
   target_w_rad_s:=0.2 \
   k_w_rate:=1.0 \
+  k_i_rate:=0.0 \
+  w_error_integral_max:=0.5 \
   w_max_rad_s:=0.3
 ```
 
@@ -472,8 +480,10 @@ ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data
 
 ```bash
 ros2 topic pub --once /car/angular_rate_tuner/k_w_rate std_msgs/msg/Float64 "{data: 1.5}"
+ros2 topic pub --once /car/angular_rate_tuner/k_i_rate std_msgs/msg/Float64 "{data: 0.05}"
 ros2 topic pub --once /car/angular_rate_tuner/target_w std_msgs/msg/Float64 "{data: 0.2}"
 ros2 topic pub --once /car/angular_rate_tuner/speed std_msgs/msg/Float64 "{data: 0.02}"
+ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: reset_integral}"
 ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: reverse}"
 ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: stop}"
 ```
@@ -482,9 +492,11 @@ ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data
 
 ```text
 k_w_rate=...
+k_i_rate=...
 target_w=...
 measured_w=...
 w_error=...
+w_error_integral=...
 cmd_w=...
 reason=running
 ```
@@ -493,10 +505,12 @@ reason=running
 
 - `measured_w` 长时间跟不上 `target_w`，且 `cmd_w` 没顶到 `w_max_rad_s`：增大 `k_w_rate`。
 - `measured_w` 超过 `target_w` 或来回振荡：减小 `k_w_rate`。
+- `k_w_rate` 已经比较稳但存在长期静差：小幅增大 `k_i_rate`，例如 `0.02 -> 0.05 -> 0.1`。
+- 加积分后出现慢速来回摆动或停止后拖尾明显：减小 `k_i_rate` 或降低 `w_error_integral_max`，并发送 `reset_integral`。
 - `cmd_w` 经常等于 `±w_max_rad_s`：不要继续加 `k_w_rate`，先确认 `w_max_rad_s`、底盘能力和速度滤波。
 - `/car/odom/carto` 抖动明显：增大 `pose_velocity_filter_tau_s`，例如 `0.15 -> 0.25`。
 
-调好后，把最终 `k_w_rate` 写回 `track_runner.launch.py` 或启动 `track_runner` 时传参。
+调好后，把最终 `k_w_rate` 和 `k_i_rate` 写回 `track_runner.launch.py` 或启动 `track_runner` 时传参。
 
 ## 4. STM 串口通信接口冻结版 v1.1
 

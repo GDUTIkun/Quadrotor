@@ -53,7 +53,7 @@ The CSV and PNG tracking plot are written under `analyse/log/` by default. Usefu
 
 - `target_w_rad_s`: target angular velocity from `/car/angular_rate_tuner/status`.
 - `current_w_rad_s`: measured angular velocity, using status first and `/car/odom/carto` as fallback.
-- `cmd_w_rad_s`, `w_error_rad_s`, `k_w_rate`: angular-rate tuner command and gain data.
+- `cmd_w_rad_s`, `w_error_rad_s`, `w_error_integral_rad`, `k_w_rate`, `k_i_rate`: angular-rate tuner command and PI gain data.
 
 Plot an existing angular-rate CSV:
 

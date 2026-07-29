@@ -9,6 +9,8 @@ def generate_launch_description():
         DeclareLaunchArgument('linear_speed_m_s', default_value='0.02'),
         DeclareLaunchArgument('target_w_rad_s', default_value='0.2'),
         DeclareLaunchArgument('k_w_rate', default_value='1.0'),
+        DeclareLaunchArgument('k_i_rate', default_value='0.0'),
+        DeclareLaunchArgument('w_error_integral_max', default_value='0.5'),
         DeclareLaunchArgument('w_max_rad_s', default_value='0.3'),
         DeclareLaunchArgument('odom_timeout_s', default_value='0.35'),
         DeclareLaunchArgument('publish_when_idle', default_value='true'),
@@ -24,6 +26,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'k_w_rate_topic', default_value='/car/angular_rate_tuner/k_w_rate'),
         DeclareLaunchArgument(
+            'k_i_rate_topic', default_value='/car/angular_rate_tuner/k_i_rate'),
+        DeclareLaunchArgument(
             'status_topic', default_value='/car/angular_rate_tuner/status'),
         Node(
             package='track_runner',
@@ -34,6 +38,8 @@ def generate_launch_description():
                 'linear_speed_m_s': LaunchConfiguration('linear_speed_m_s'),
                 'target_w_rad_s': LaunchConfiguration('target_w_rad_s'),
                 'k_w_rate': LaunchConfiguration('k_w_rate'),
+                'k_i_rate': LaunchConfiguration('k_i_rate'),
+                'w_error_integral_max': LaunchConfiguration('w_error_integral_max'),
                 'w_max_rad_s': LaunchConfiguration('w_max_rad_s'),
                 'odom_timeout_s': LaunchConfiguration('odom_timeout_s'),
                 'publish_when_idle': LaunchConfiguration('publish_when_idle'),
@@ -44,6 +50,7 @@ def generate_launch_description():
                 'speed_topic': LaunchConfiguration('speed_topic'),
                 'target_w_topic': LaunchConfiguration('target_w_topic'),
                 'k_w_rate_topic': LaunchConfiguration('k_w_rate_topic'),
+                'k_i_rate_topic': LaunchConfiguration('k_i_rate_topic'),
                 'status_topic': LaunchConfiguration('status_topic'),
             }],
         ),

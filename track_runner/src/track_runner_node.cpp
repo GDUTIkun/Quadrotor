@@ -98,6 +98,8 @@ public:
     goal_tolerance_m_ = declare_parameter<double>("goal_tolerance_m", 0.10);
     k_w_ = declare_parameter<double>("k_w", 1.8);
     k_w_rate_ = declare_parameter<double>("k_w_rate", 1.0);
+    k_i_rate_ = declare_parameter<double>("k_i_rate", 0.0);
+    w_error_integral_max_ = declare_parameter<double>("w_error_integral_max", 0.5);
     w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.6);
     pose_timeout_s_ = declare_parameter<double>("pose_timeout_s", 0.5);
     angular_velocity_timeout_s_ = declare_parameter<double>("angular_velocity_timeout_s", 0.35);
@@ -127,6 +129,8 @@ public:
     waypoint_tolerance_m_ = std::max(0.01, waypoint_tolerance_m_);
     goal_tolerance_m_ = std::max(0.01, goal_tolerance_m_);
     k_w_rate_ = std::max(0.0, k_w_rate_);
+    k_i_rate_ = std::max(0.0, k_i_rate_);
+    w_error_integral_max_ = std::max(0.0, w_error_integral_max_);
     lap_length_m_ = 2.0 * straight_length_m_ + 2.0 * M_PI * radius_m_;
     build_path();
 
@@ -306,6 +310,7 @@ private:
     if (state_ == RunnerState::Running) {
       if (!pose_is_fresh()) {
         publish_stop();
+        reset_rate_integral();
         status_reason_ = "pose_unavailable";
       } else {
         publish_tracking_command();
@@ -357,10 +362,18 @@ private:
     last_w_error_ = 0.0;
     const bool use_rate_loop = use_angular_velocity_feedback_ && angular_velocity_is_fresh();
     if (use_rate_loop) {
+      const auto stamp = now();
+      const double dt = control_dt(stamp);
       last_w_error_ = target_w - measured_w_rad_s_;
+      w_error_integral_ = std::clamp(
+        w_error_integral_ + last_w_error_ * dt,
+        -w_error_integral_max_, w_error_integral_max_);
       w = std::clamp(
-        k_w_rate_ * last_w_error_,
+        k_w_rate_ * last_w_error_ + k_i_rate_ * w_error_integral_,
         -w_max_rad_s_, w_max_rad_s_);
+    } else {
+      reset_rate_integral();
+      last_control_time_ = now();
     }
 
     geometry_msgs::msg::Twist twist;
@@ -445,6 +458,21 @@ private:
     cmd_pub_->publish(geometry_msgs::msg::Twist{});
   }
 
+  double control_dt(const rclcpp::Time & stamp)
+  {
+    double dt = (stamp - last_control_time_).seconds();
+    if (dt <= 0.0 || dt > 0.2) {
+      dt = 0.0;
+    }
+    last_control_time_ = stamp;
+    return dt;
+  }
+
+  void reset_rate_integral()
+  {
+    w_error_integral_ = 0.0;
+  }
+
   void reset_progress()
   {
     current_index_ = 0;
@@ -455,6 +483,8 @@ private:
     last_target_w_ = 0.0;
     last_cmd_w_ = 0.0;
     last_w_error_ = 0.0;
+    reset_rate_integral();
+    last_control_time_ = now();
     last_target_ = path_.empty() ? Point{} : path_.front();
     status_reason_ = "reset";
   }
@@ -474,9 +504,12 @@ private:
            << " index=" << current_index_ << "/" << path_.size()
            << " progress=" << total_progress_m_
            << " speed=" << speed_m_s_
+           << " k_w_rate=" << k_w_rate_
+           << " k_i_rate=" << k_i_rate_
            << " target_w=" << last_target_w_
            << " measured_w=" << measured_w_rad_s_
            << " w_error=" << last_w_error_
+           << " w_error_integral=" << w_error_integral_
            << " cmd_w=" << last_cmd_w_
            << " yaw_error=" << last_yaw_error_
            << " target=(" << last_target_.x << "," << last_target_.y << ")"
@@ -497,6 +530,8 @@ private:
   double goal_tolerance_m_{0.10};
   double k_w_{1.8};
   double k_w_rate_{1.0};
+  double k_i_rate_{0.0};
+  double w_error_integral_max_{0.5};
   double w_max_rad_s_{0.6};
   double pose_timeout_s_{0.5};
   double angular_velocity_timeout_s_{0.35};
@@ -513,6 +548,7 @@ private:
   double measured_w_rad_s_{0.0};
   bool has_angular_velocity_{false};
   rclcpp::Time last_angular_velocity_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_control_time_{0, 0, RCL_ROS_TIME};
   std::vector<Point> path_;
   std::vector<double> cumulative_s_;
   std::size_t current_index_{0};
@@ -524,6 +560,7 @@ private:
   double last_target_w_{0.0};
   double last_cmd_w_{0.0};
   double last_w_error_{0.0};
+  double w_error_integral_{0.0};
   std::string status_reason_{"idle"};
 
   rclcpp::Time last_status_time_{0, 0, RCL_ROS_TIME};
