@@ -18,18 +18,33 @@
 #include "rclcpp/rclcpp.hpp"
 #include "lslidar_driver/lslidar_driver.h"
 
+#include <csignal>
+
 using namespace lslidar_driver;
-volatile sig_atomic_t flag = 1;
+
+volatile std::sig_atomic_t flag = 1;
+
+void handle_signal(int)
+{
+  flag = 0;
+}
 
 int main(int argc, char* argv[])
 {
-  rclcpp::init(argc, argv);
+  rclcpp::init(
+    argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+  std::signal(SIGINT, handle_signal);
+  std::signal(SIGTERM, handle_signal);
+
   auto node = std::make_shared<lslidar_driver::LslidarDriver>();
   
-  while (rclcpp::ok() && node->polling()) {
+  while (flag && rclcpp::ok() && node->polling()) {
         rclcpp::spin_some(node);
   }
   //rclcpp::spin(node);
-  rclcpp::shutdown();
+  node.reset();
+  if (rclcpp::ok()) {
+    rclcpp::shutdown();
+  }
   return 0;
 }

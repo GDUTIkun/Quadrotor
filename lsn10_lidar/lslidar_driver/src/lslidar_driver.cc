@@ -42,16 +42,10 @@ int scan_crop_max[]={90,270};     //修改后编译即可
 namespace lslidar_driver
 {
 
-	static void my_hander(int sig)
-	{
-		printf("sig: %d", sig);
-		abort();
-	}
 	LslidarDriver::LslidarDriver() : LslidarDriver(rclcpp::NodeOptions()) {}
-	LslidarDriver::LslidarDriver(const rclcpp::NodeOptions &options) : Node("lslidar_driver_node", options), diagnostics(this)
+	LslidarDriver::LslidarDriver(const rclcpp::NodeOptions &options)
+		: Node("lslidar_driver_node", options), pubscan_thread_(nullptr), diagnostics(this)
 	{
-		signal(SIGINT, my_hander);
-
 		if (!this->initialize())
 			RCLCPP_ERROR(this->get_logger(), "Could not initialize the driver...");
 		else
@@ -60,6 +54,14 @@ namespace lslidar_driver
 
 	LslidarDriver::~LslidarDriver()
 	{
+		pubscan_cond_.notify_all();
+		if (pubscan_thread_)
+		{
+			pubscan_thread_->interrupt();
+			pubscan_thread_->join();
+			delete pubscan_thread_;
+			pubscan_thread_ = nullptr;
+		}
 		return;
 	}
 
@@ -723,7 +725,6 @@ namespace lslidar_driver
 			invalidValue--;
 		if (invalidValue <= 1)
 		{
-			delete packet_bytes;
 			return;
 		}
 
@@ -795,12 +796,6 @@ namespace lslidar_driver
 				idx++;
 			}
 		}
-		packet_bytes = {0x00};
-		if (packet_bytes)
-		{
-			packet_bytes = NULL;
-			delete packet_bytes;
-		}
 	}
 
 	void LslidarDriver::data_processing_2(unsigned char *packet_bytes, int len) // 处理每一包的数据
@@ -867,7 +862,6 @@ namespace lslidar_driver
 			invalidValue--;
 		if (invalidValue <= 1)
 		{
-			delete packet_bytes;
 			return;
 		}
 
@@ -951,12 +945,6 @@ namespace lslidar_driver
 				last_degree = scan_points_[idx].degree;
 				idx++;
 			}
-		}
-		packet_bytes = {0x00};
-		if (packet_bytes)
-		{
-			packet_bytes = NULL;
-			delete packet_bytes;
 		}
 	}
 
@@ -1050,7 +1038,18 @@ namespace lslidar_driver
 							scan->intensities[point_idx + count_num] = points[i + 3000].intensity;
 						}*/
 					}
-					scan_pub->publish(std::move(scan));
+					if (!rclcpp::ok())
+					{
+						break;
+					}
+					try
+					{
+						scan_pub->publish(std::move(scan));
+					}
+					catch (const rclcpp::exceptions::RCLError &)
+					{
+						break;
+					}
 				}
 				if (pubPointCloud2)
 				{
@@ -1120,7 +1119,18 @@ namespace lslidar_driver
 					}
 					sensor_msgs::msg::PointCloud2 pc_msg;
 					pcl::toROSMsg(*point_cloud, pc_msg);
-					point_cloud_pub->publish(pc_msg);
+					if (!rclcpp::ok())
+					{
+						break;
+					}
+					try
+					{
+						point_cloud_pub->publish(pc_msg);
+					}
+					catch (const rclcpp::exceptions::RCLError &)
+					{
+						break;
+					}
 				}
 			}
 			else
@@ -1199,7 +1209,18 @@ namespace lslidar_driver
 					}
 					
 
-					scan_pub->publish(std::move(scan));
+					if (!rclcpp::ok())
+					{
+						break;
+					}
+					try
+					{
+						scan_pub->publish(std::move(scan));
+					}
+					catch (const rclcpp::exceptions::RCLError &)
+					{
+						break;
+					}
 				}
 				if (pubPointCloud2)
 				{
@@ -1250,7 +1271,18 @@ namespace lslidar_driver
 					}
 					sensor_msgs::msg::PointCloud2 pc_msg;
 					pcl::toROSMsg(*point_cloud, pc_msg);
-					point_cloud_pub->publish(pc_msg);
+					if (!rclcpp::ok())
+					{
+						break;
+					}
+					try
+					{
+						point_cloud_pub->publish(pc_msg);
+					}
+					catch (const rclcpp::exceptions::RCLError &)
+					{
+						break;
+					}
 				}
 			}
 			count_num = 0;
@@ -1410,7 +1442,7 @@ namespace lslidar_driver
 			else
 				LslidarDriver::data_processing(packet_bytes, len);
 		}
-		delete packet_bytes;
+		delete[] packet_bytes;
 		return true;
 	}
 
