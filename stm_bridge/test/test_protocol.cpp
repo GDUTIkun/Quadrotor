@@ -141,7 +141,11 @@ TEST(StmProtocol, ParserHandlesNoiseHalfPacketsAndStickyPackets)
   EXPECT_EQ(frames[0].msg_id, stm_bridge::kMsgCmdVel);
   EXPECT_EQ(frames[0].seq, 7);
   EXPECT_EQ(frames[0].payload, payload({97, 98, 99}));
-  EXPECT_EQ(stm_bridge::decode_imu(frames[1].payload).stamp_ms, 10U);
+  const auto imu = stm_bridge::decode_imu(frames[1].payload);
+  EXPECT_EQ(imu.gx_cdeg_s, 4);
+  EXPECT_EQ(imu.gy_cdeg_s, 5);
+  EXPECT_EQ(imu.gz_cdeg_s, 6);
+  EXPECT_EQ(imu.stamp_ms, 10U);
   EXPECT_EQ(parser.dropped_bytes(), 4U);
 }
 

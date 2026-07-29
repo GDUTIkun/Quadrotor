@@ -1,6 +1,6 @@
 # stm_bridge
 
-ROS2 与 STM32 底盘控制板的串口桥接包，协议见仓库根目录 `program.md` 的“STM 串口通信接口冻结版 v1.0”。
+ROS2 与 STM32 底盘控制板的串口桥接包，协议见仓库根目录 `program.md` 的“STM 串口通信接口冻结版 v1.1”。
 
 ## 构建
 

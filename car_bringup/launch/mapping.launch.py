@@ -89,7 +89,7 @@ def generate_launch_description():
         DeclareLaunchArgument('laser_z', default_value='0.015'),
         DeclareLaunchArgument('laser_roll', default_value='0.0'),
         DeclareLaunchArgument('laser_pitch', default_value='0.0'),
-        DeclareLaunchArgument('laser_yaw', default_value='0.0'),
+        DeclareLaunchArgument('laser_yaw', default_value='-1.5708'),
         stm_node,
         lidar_launch,
         base_to_laser_tf,

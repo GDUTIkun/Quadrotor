@@ -265,7 +265,7 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "STM protocol v1.0: 0x01 CMD_VEL, 0x81 IMU, 0x82 WHEEL_ODOM, 0x83 STATUS");
+      "STM protocol v1.1: 0x01 CMD_VEL, 0x81 IMU, 0x82 WHEEL_ODOM, 0x83 STATUS");
   }
 
 private:
@@ -373,9 +373,9 @@ private:
     const double yaw = data.yaw_cdeg / 100.0 * M_PI / 180.0;
     msg.orientation = euler_to_quaternion(roll, pitch, yaw);
 
-    msg.angular_velocity.x = data.gx_mdps * M_PI / (180.0 * 1000.0);
-    msg.angular_velocity.y = data.gy_mdps * M_PI / (180.0 * 1000.0);
-    msg.angular_velocity.z = data.gz_mdps * M_PI / (180.0 * 1000.0);
+    msg.angular_velocity.x = data.gx_cdeg_s * M_PI / (180.0 * 100.0);
+    msg.angular_velocity.y = data.gy_cdeg_s * M_PI / (180.0 * 100.0);
+    msg.angular_velocity.z = data.gz_cdeg_s * M_PI / (180.0 * 100.0);
     msg.linear_acceleration.x = data.ax_mg * kGravity / 1000.0;
     msg.linear_acceleration.y = data.ay_mg * kGravity / 1000.0;
     msg.linear_acceleration.z = data.az_mg * kGravity / 1000.0;

@@ -27,9 +27,9 @@ struct ImuPayload
   std::int16_t ax_mg{};
   std::int16_t ay_mg{};
   std::int16_t az_mg{};
-  std::int16_t gx_mdps{};
-  std::int16_t gy_mdps{};
-  std::int16_t gz_mdps{};
+  std::int16_t gx_cdeg_s{};
+  std::int16_t gy_cdeg_s{};
+  std::int16_t gz_cdeg_s{};
   std::int16_t yaw_cdeg{};
   std::int16_t pitch_cdeg{};
   std::int16_t roll_cdeg{};
@@ -92,4 +92,3 @@ private:
 };
 
 }  // namespace stm_bridge
-
