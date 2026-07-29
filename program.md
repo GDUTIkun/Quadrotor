@@ -436,6 +436,68 @@ ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: stop
 - 若圆弧段转向跟不上，优先增大 `k_w` 或 `w_max_rad_s`。
 - 若目标点过近导致轨迹像折线，避免把 `lookahead_distance_m` 调到接近 `path_spacing_m`，建议从 `0.25 m` 起调。
 
+### 3.5.1 `angular_rate_tuner`
+
+职责：
+
+- 单独调试角速度内环，不跑路径、不使用角度外环。
+- 订阅 `/car/odom/carto` 获取 `measured_w`。
+- 发布 `/cmd_vel`，命令形式为：
+
+```text
+cmd_w = clamp(k_w_rate * (target_w - measured_w), -w_max_rad_s, w_max_rad_s)
+linear.x = linear_speed_m_s
+```
+
+启动：
+
+```bash
+cd ~/flight_ws/car
+source install/setup.bash
+ros2 launch track_runner angular_rate_tuner.launch.py \
+  linear_speed_m_s:=0.02 \
+  target_w_rad_s:=0.2 \
+  k_w_rate:=1.0 \
+  w_max_rad_s:=0.3
+```
+
+运行前确认不要同时启动 `track_runner_node`、`path_controller_node` 或手动 `/cmd_vel` 发布器。启动后节点默认只发布零速，收到 `start` 后才开始调参：
+
+```bash
+ros2 topic echo /car/angular_rate_tuner/status
+ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: start}"
+```
+
+运行中调参：
+
+```bash
+ros2 topic pub --once /car/angular_rate_tuner/k_w_rate std_msgs/msg/Float64 "{data: 1.5}"
+ros2 topic pub --once /car/angular_rate_tuner/target_w std_msgs/msg/Float64 "{data: 0.2}"
+ros2 topic pub --once /car/angular_rate_tuner/speed std_msgs/msg/Float64 "{data: 0.02}"
+ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: reverse}"
+ros2 topic pub --once /car/angular_rate_tuner/command std_msgs/msg/String "{data: stop}"
+```
+
+状态中重点观察：
+
+```text
+k_w_rate=...
+target_w=...
+measured_w=...
+w_error=...
+cmd_w=...
+reason=running
+```
+
+调参判断：
+
+- `measured_w` 长时间跟不上 `target_w`，且 `cmd_w` 没顶到 `w_max_rad_s`：增大 `k_w_rate`。
+- `measured_w` 超过 `target_w` 或来回振荡：减小 `k_w_rate`。
+- `cmd_w` 经常等于 `±w_max_rad_s`：不要继续加 `k_w_rate`，先确认 `w_max_rad_s`、底盘能力和速度滤波。
+- `/car/odom/carto` 抖动明显：增大 `pose_velocity_filter_tau_s`，例如 `0.15 -> 0.25`。
+
+调好后，把最终 `k_w_rate` 写回 `track_runner.launch.py` 或启动 `track_runner` 时传参。
+
 ## 4. STM 串口通信接口冻结版 v1.1
 
 本节作为 ROS 侧与 STM 侧的对接依据。STM 侧先按这里的帧格式发 `STATUS` 和 `IMU`，ROS 侧能解析并发布 topic 后，再联调 `CMD_VEL` 下发和轮式里程计。
