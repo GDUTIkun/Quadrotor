@@ -165,7 +165,7 @@ def generate_launch_description():
         DeclareLaunchArgument('carto_odom_topic', default_value='/car/odom/carto'),
         DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
-        DeclareLaunchArgument('pose_velocity_filter_tau_s', default_value='0.15'),
+        DeclareLaunchArgument('pose_velocity_filter_tau_s', default_value='0.25'),
         DeclareLaunchArgument('car_namespace', default_value='car'),
         DeclareLaunchArgument('carto_map_frame', default_value='car_carto_map'),
         DeclareLaunchArgument('odom_frame', default_value='car_odom'),

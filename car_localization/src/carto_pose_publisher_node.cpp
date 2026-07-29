@@ -58,7 +58,7 @@ public:
     odom_child_frame_id_ = declare_parameter<std::string>("odom_child_frame_id", base_frame_id_);
     yaw_offset_rad_ = declare_parameter<double>("yaw_offset_rad", 0.0);
     publish_odom_ = declare_parameter<bool>("publish_odom", true);
-    velocity_filter_tau_s_ = declare_parameter<double>("velocity_filter_tau_s", 0.15);
+    velocity_filter_tau_s_ = declare_parameter<double>("velocity_filter_tau_s", 0.25);
     max_velocity_dt_s_ = declare_parameter<double>("max_velocity_dt_s", 0.5);
     const double publish_rate_hz = declare_parameter<double>("publish_rate_hz", 20.0);
 
@@ -189,7 +189,7 @@ private:
   std::string odom_child_frame_id_;
   double yaw_offset_rad_{};
   bool publish_odom_{true};
-  double velocity_filter_tau_s_{0.15};
+  double velocity_filter_tau_s_{0.25};
   double max_velocity_dt_s_{0.5};
   double filtered_vx_m_s_{0.0};
   double filtered_vy_m_s_{0.0};

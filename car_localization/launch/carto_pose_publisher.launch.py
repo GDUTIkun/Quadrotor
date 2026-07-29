@@ -15,7 +15,7 @@ def generate_launch_description():
         DeclareLaunchArgument('publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('yaw_offset_rad', default_value='0.0'),
         DeclareLaunchArgument('publish_odom', default_value='true'),
-        DeclareLaunchArgument('velocity_filter_tau_s', default_value='0.15'),
+        DeclareLaunchArgument('velocity_filter_tau_s', default_value='0.25'),
         DeclareLaunchArgument('max_velocity_dt_s', default_value='0.5'),
         Node(
             package='car_localization',

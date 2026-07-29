@@ -285,7 +285,7 @@ alpha    = dt / (velocity_filter_tau_s + dt)
 | `publish_rate_hz` | `20.0` | 坐标发布频率 |
 | `yaw_offset_rad` | `0.0` | 实车确认后的额外 yaw 修正，默认不开 |
 | `publish_odom` | `true` | 是否发布带速度项的 `/car/odom/carto` |
-| `velocity_filter_tau_s` | `0.15` | 差分速度一阶低通时间常数 |
+| `velocity_filter_tau_s` | `0.25` | 差分速度一阶低通时间常数 |
 | `max_velocity_dt_s` | `0.5` | 超过该采样间隔时重置速度滤波 |
 
 ### 3.5 `track_runner`
@@ -521,7 +521,7 @@ reason=running
 - 角速度响应太钝、超调后回落慢：可小幅增加 `k_d_rate`，例如 `0.005 -> 0.01 -> 0.02`。
 - 加微分后 `cmd_w` 高频抖动：减小 `k_d_rate`，或增大 `w_error_derivative_filter_tau_s`，例如 `0.05 -> 0.10`。
 - `cmd_w` 经常等于 `±w_max_rad_s`：不要继续加 `k_w_rate`，先确认 `w_max_rad_s`、底盘能力和速度滤波。
-- `/car/odom/carto` 抖动明显：增大 `pose_velocity_filter_tau_s`，例如 `0.15 -> 0.25`。
+- `/car/odom/carto` 抖动明显：增大 `pose_velocity_filter_tau_s`，例如 `0.25 -> 0.35`。
 
 调好后，把最终 `k_w_rate`、`k_i_rate` 和 `k_d_rate` 写回 `track_runner.launch.py` 或启动 `track_runner` 时传参。
 
