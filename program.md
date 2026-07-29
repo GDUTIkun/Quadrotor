@@ -285,6 +285,7 @@ alpha    = dt / (velocity_filter_tau_s + dt)
 | `publish_rate_hz` | `20.0` | 坐标发布频率 |
 | `yaw_offset_rad` | `0.0` | 实车确认后的额外 yaw 修正，默认不开 |
 | `publish_odom` | `true` | 是否发布带速度项的 `/car/odom/carto` |
+| `pose_filter_tau_s` | `0.10` | 输出位姿一阶低通时间常数，0 表示不滤波 |
 | `velocity_filter_tau_s` | `0.25` | 差分速度一阶低通时间常数 |
 | `max_velocity_dt_s` | `0.5` | 超过该采样间隔时重置速度滤波 |
 

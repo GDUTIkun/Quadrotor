@@ -21,6 +21,7 @@ def generate_launch_description():
     carto_odom_topic = LaunchConfiguration('carto_odom_topic')
     pose_publish_rate_hz = LaunchConfiguration('pose_publish_rate_hz')
     pose_yaw_offset_rad = LaunchConfiguration('pose_yaw_offset_rad')
+    pose_filter_tau_s = LaunchConfiguration('pose_filter_tau_s')
     pose_velocity_filter_tau_s = LaunchConfiguration('pose_velocity_filter_tau_s')
     car_namespace = LaunchConfiguration('car_namespace')
     carto_map_frame = LaunchConfiguration('carto_map_frame')
@@ -156,6 +157,7 @@ def generate_launch_description():
             'publish_rate_hz': pose_publish_rate_hz,
             'yaw_offset_rad': pose_yaw_offset_rad,
             'publish_odom': True,
+            'pose_filter_tau_s': pose_filter_tau_s,
             'velocity_filter_tau_s': pose_velocity_filter_tau_s,
         }],
     )
@@ -201,6 +203,7 @@ def generate_launch_description():
         DeclareLaunchArgument('carto_odom_topic', default_value='/car/odom/carto'),
         DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
+        DeclareLaunchArgument('pose_filter_tau_s', default_value='0.10'),
         DeclareLaunchArgument('pose_velocity_filter_tau_s', default_value='0.25'),
         DeclareLaunchArgument('car_namespace', default_value='car'),
         DeclareLaunchArgument('carto_map_frame', default_value='car_carto_map'),

@@ -15,6 +15,7 @@ def generate_launch_description():
         DeclareLaunchArgument('publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('yaw_offset_rad', default_value='0.0'),
         DeclareLaunchArgument('publish_odom', default_value='true'),
+        DeclareLaunchArgument('pose_filter_tau_s', default_value='0.10'),
         DeclareLaunchArgument('velocity_filter_tau_s', default_value='0.25'),
         DeclareLaunchArgument('max_velocity_dt_s', default_value='0.5'),
         Node(
@@ -32,6 +33,7 @@ def generate_launch_description():
                 'publish_rate_hz': LaunchConfiguration('publish_rate_hz'),
                 'yaw_offset_rad': LaunchConfiguration('yaw_offset_rad'),
                 'publish_odom': LaunchConfiguration('publish_odom'),
+                'pose_filter_tau_s': LaunchConfiguration('pose_filter_tau_s'),
                 'velocity_filter_tau_s': LaunchConfiguration('velocity_filter_tau_s'),
                 'max_velocity_dt_s': LaunchConfiguration('max_velocity_dt_s'),
             }],

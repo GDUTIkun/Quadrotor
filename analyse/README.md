@@ -87,3 +87,13 @@ Plot an existing circle-angle CSV:
 ```bash
 python3 analyse/record_circle_angle.py --plot-only analyse/log/circle_angle_YYYYMMDD_HHMMSS.csv
 ```
+
+Record live x-y pose and target points from track_runner, then plot on exit:
+
+```bash
+cd ~/flight_ws/car
+source install/setup.bash
+python3 analyse/record_xy.py --send-start --stop-on-exit
+```
+
+The script subscribes to `/car/pose` and `/car/track_runner/status` by default, writes a CSV under `analyse/log/`, and automatically writes an `_xy.png` plot with both actual pose and target path points.
