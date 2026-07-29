@@ -376,6 +376,43 @@ std::vector<Point> make_arc_path(
   return points;
 }
 
+std::vector<Point> make_racetrack_path(
+  const Point & start, double start_yaw, double straight_length_m,
+  double radius_m, double spacing_m, bool turn_right)
+{
+  const double arc_angle = turn_right ? -M_PI : M_PI;
+  std::vector<Point> path;
+
+  const auto append_segment = [&path](const std::vector<Point> & segment) {
+      if (segment.empty()) {
+        return;
+      }
+      const auto first = segment.begin() + (path.empty() ? 0 : 1);
+      path.insert(path.end(), first, segment.end());
+    };
+
+  const auto first_straight =
+    make_straight_path(start, start_yaw, straight_length_m, spacing_m);
+  append_segment(first_straight);
+
+  const auto first_arc =
+    make_arc_path(path.back(), start_yaw, radius_m, arc_angle, spacing_m);
+  append_segment(first_arc);
+
+  const double return_yaw = start_yaw + arc_angle;
+  const auto second_straight =
+    make_straight_path(path.back(), return_yaw, straight_length_m, spacing_m);
+  append_segment(second_straight);
+
+  const auto second_arc =
+    make_arc_path(path.back(), return_yaw, radius_m, arc_angle, spacing_m);
+  append_segment(second_arc);
+
+  // Make the closed-loop endpoint exact instead of leaving trigonometric drift.
+  path.back() = start;
+  return path;
+}
+
 bool segment_is_visible(
   const Point & a, const Point & b,
   const std::vector<KeepoutZone> & zones)

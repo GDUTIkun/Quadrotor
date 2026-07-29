@@ -98,8 +98,17 @@ private:
         pose.pose.position.y,
         quaternion_to_yaw(pose.pose.orientation)});
     }
+    closed_path_ =
+      path_.size() > 2 &&
+      std::hypot(path_.front().x - path_.back().x, path_.front().y - path_.back().y) <=
+      config_.xy_tolerance_m;
+    closed_path_departed_ = !closed_path_;
+    start_x_ = path_.front().x;
+    start_y_ = path_.front().y;
     last_phase_.clear();
-    RCLCPP_INFO(get_logger(), "Accepted path with %zu points", path_.size());
+    RCLCPP_INFO(
+      get_logger(), "Accepted path with %zu points, closed=%s",
+      path_.size(), closed_path_ ? "true" : "false");
   }
 
   void control_step()
@@ -125,7 +134,12 @@ private:
       transform.transform.translation.x,
       transform.transform.translation.y,
       quaternion_to_yaw(transform.transform.rotation)};
-    const auto result = path_controller::compute_command(robot, path_, config_);
+    if (closed_path_ && !closed_path_departed_) {
+      const double departure_distance = std::hypot(robot.x - start_x_, robot.y - start_y_);
+      closed_path_departed_ = departure_distance > 2.0 * config_.xy_tolerance_m;
+    }
+    const auto result = path_controller::compute_command(
+      robot, path_, config_, !closed_path_ || closed_path_departed_);
 
     if (result.phase != last_phase_) {
       last_phase_ = result.phase;
@@ -156,6 +170,8 @@ private:
   void clear_path()
   {
     path_.clear();
+    closed_path_ = false;
+    closed_path_departed_ = false;
     last_phase_.clear();
     publish_stop();
   }
@@ -179,6 +195,10 @@ private:
   path_controller::ControllerConfig config_;
   std::vector<path_controller::PathPoint> path_;
   std::string last_phase_;
+  bool closed_path_{};
+  bool closed_path_departed_{};
+  double start_x_{};
+  double start_y_{};
 
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;

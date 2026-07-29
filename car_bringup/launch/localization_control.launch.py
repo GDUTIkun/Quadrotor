@@ -17,6 +17,11 @@ def generate_launch_description():
 
     load_state_filename = LaunchConfiguration('load_state_filename')
     obstacle_file = LaunchConfiguration('obstacle_file')
+    plan_mode = LaunchConfiguration('plan_mode')
+    path_spacing_m = LaunchConfiguration('path_spacing_m')
+    racetrack_straight_length_m = LaunchConfiguration('racetrack_straight_length_m')
+    racetrack_radius_m = LaunchConfiguration('racetrack_radius_m')
+    racetrack_turn_right = LaunchConfiguration('racetrack_turn_right')
     pose_topic = LaunchConfiguration('pose_topic')
     pose_publish_rate_hz = LaunchConfiguration('pose_publish_rate_hz')
     pose_yaw_offset_rad = LaunchConfiguration('pose_yaw_offset_rad')
@@ -164,6 +169,11 @@ def generate_launch_description():
             'global_frame_id': carto_map_frame,
             'base_frame_id': base_frame,
             'obstacle_file': obstacle_file,
+            'plan_mode': plan_mode,
+            'path_spacing_m': path_spacing_m,
+            'racetrack_straight_length_m': racetrack_straight_length_m,
+            'racetrack_radius_m': racetrack_radius_m,
+            'racetrack_turn_right': racetrack_turn_right,
         }],
     )
 
@@ -191,6 +201,11 @@ def generate_launch_description():
             default_value='/home/t/car_ws/carto/map/my_map.pbstream',
         ),
         DeclareLaunchArgument('obstacle_file', default_value=''),
+        DeclareLaunchArgument('plan_mode', default_value='goal'),
+        DeclareLaunchArgument('path_spacing_m', default_value='0.02'),
+        DeclareLaunchArgument('racetrack_straight_length_m', default_value='1.5'),
+        DeclareLaunchArgument('racetrack_radius_m', default_value='0.75'),
+        DeclareLaunchArgument('racetrack_turn_right', default_value='true'),
         DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
         DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),

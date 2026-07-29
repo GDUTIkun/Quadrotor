@@ -2,12 +2,14 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 
 using path_planner::PlanningError;
 using path_planner::Point;
 using path_planner::inflate_zone;
 using path_planner::make_arc_path;
+using path_planner::make_racetrack_path;
 using path_planner::make_straight_path;
 using path_planner::plan_path;
 using path_planner::rectangle_zone;
@@ -96,4 +98,32 @@ TEST(PathPlannerGeometry, MakesLeftArcTestPath)
   EXPECT_NEAR(path.front().y, 0.0, 1e-9);
   EXPECT_NEAR(path.back().x, 0.3, 1e-6);
   EXPECT_NEAR(path.back().y, 0.3, 1e-6);
+}
+
+TEST(PathPlannerGeometry, MakesClockwiseRacetrackAndReturnsToStart)
+{
+  const auto path = make_racetrack_path(
+    Point{0.0, 0.0}, M_PI / 2.0, 1.5, 0.75, 0.02, true);
+
+  ASSERT_GT(path.size(), 300U);
+  EXPECT_NEAR(path.front().x, 0.0, 1e-9);
+  EXPECT_NEAR(path.front().y, 0.0, 1e-9);
+  EXPECT_NEAR(path.back().x, 0.0, 1e-9);
+  EXPECT_NEAR(path.back().y, 0.0, 1e-9);
+  EXPECT_NEAR(path_planner::path_length(path), 3.0 + 1.5 * M_PI, 1e-3);
+
+  double min_x = path.front().x;
+  double max_x = path.front().x;
+  double min_y = path.front().y;
+  double max_y = path.front().y;
+  for (const auto & point : path) {
+    min_x = std::min(min_x, point.x);
+    max_x = std::max(max_x, point.x);
+    min_y = std::min(min_y, point.y);
+    max_y = std::max(max_y, point.y);
+  }
+  EXPECT_NEAR(min_x, 0.0, 1e-6);
+  EXPECT_NEAR(max_x, 1.5, 1e-6);
+  EXPECT_NEAR(min_y, -0.75, 1e-4);
+  EXPECT_NEAR(max_y, 2.25, 1e-4);
 }

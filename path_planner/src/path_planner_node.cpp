@@ -54,6 +54,10 @@ public:
     test_line_length_m_ = declare_parameter<double>("test_line_length_m", 0.5);
     test_arc_radius_m_ = declare_parameter<double>("test_arc_radius_m", 0.3);
     test_arc_angle_rad_ = declare_parameter<double>("test_arc_angle_rad", M_PI_2);
+    racetrack_straight_length_m_ =
+      declare_parameter<double>("racetrack_straight_length_m", 1.5);
+    racetrack_radius_m_ = declare_parameter<double>("racetrack_radius_m", 0.75);
+    racetrack_turn_right_ = declare_parameter<bool>("racetrack_turn_right", true);
     test_publish_rate_hz_ = declare_parameter<double>("test_publish_rate_hz", 2.0);
     test_publish_repeats_ = declare_parameter<int>("test_publish_repeats", 20);
 
@@ -133,6 +137,11 @@ private:
         points = path_planner::make_arc_path(
           start, start_yaw, test_arc_radius_m_, test_arc_angle_rad_, path_spacing_m_);
         goal_yaw = start_yaw + test_arc_angle_rad_;
+      } else if (plan_mode_ == "racetrack") {
+        points = path_planner::make_racetrack_path(
+          start, start_yaw, racetrack_straight_length_m_,
+          racetrack_radius_m_, path_spacing_m_, racetrack_turn_right_);
+        goal_yaw = start_yaw;
       } else {
         publish_status("failed reason=unsupported_plan_mode mode=" + plan_mode_);
         RCLCPP_ERROR(get_logger(), "Unsupported plan_mode: %s", plan_mode_.c_str());
@@ -268,6 +277,9 @@ private:
   double test_line_length_m_{};
   double test_arc_radius_m_{};
   double test_arc_angle_rad_{};
+  double racetrack_straight_length_m_{};
+  double racetrack_radius_m_{};
+  bool racetrack_turn_right_{};
   double test_publish_rate_hz_{};
   int test_publish_repeats_{};
   bool test_path_ready_{false};

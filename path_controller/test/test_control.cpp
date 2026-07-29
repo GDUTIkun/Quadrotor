@@ -91,3 +91,19 @@ TEST(PathControllerControl, ControllerReachesInsideTolerances)
   EXPECT_DOUBLE_EQ(result.v, 0.0);
   EXPECT_DOUBLE_EQ(result.w, 0.0);
 }
+
+TEST(PathControllerControl, ClosedPathCanDepartFromItsGoalPoint)
+{
+  const ControllerConfig config;
+  const std::vector<PathPoint> path{
+    {0.0, 0.0, 0.0},
+    {1.0, 0.0, 0.0},
+    {0.0, 0.0, 0.0}};
+
+  const auto result = compute_command(
+    RobotPose{0.0, 0.0, 0.0}, path, config, false);
+
+  EXPECT_FALSE(result.reached);
+  EXPECT_EQ(result.phase, "track_path");
+  EXPECT_GT(result.v, 0.0);
+}

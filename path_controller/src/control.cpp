@@ -44,7 +44,8 @@ double limit_with_min(double value, double max_abs, double min_abs)
 CommandResult compute_command(
   const RobotPose & robot,
   const std::vector<PathPoint> & path,
-  const ControllerConfig & config)
+  const ControllerConfig & config,
+  bool allow_goal_completion)
 {
   if (path.empty()) {
     return CommandResult{0.0, 0.0, false, "no_path", 0.0, 0.0, 0.0, 0.0};
@@ -52,7 +53,7 @@ CommandResult compute_command(
 
   const auto & goal = path.back();
   const double distance_to_goal = std::hypot(goal.x - robot.x, goal.y - robot.y);
-  if (distance_to_goal <= config.xy_tolerance_m) {
+  if (allow_goal_completion && distance_to_goal <= config.xy_tolerance_m) {
     const double yaw_error = normalize_angle(goal.yaw - robot.yaw);
     if (std::abs(yaw_error) <= config.yaw_tolerance_rad) {
       return CommandResult{

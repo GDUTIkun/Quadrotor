@@ -58,6 +58,10 @@ std::vector<Point> make_arc_path(
   const Point & start, double start_yaw, double radius_m,
   double angle_rad, double spacing_m);
 
+std::vector<Point> make_racetrack_path(
+  const Point & start, double start_yaw, double straight_length_m,
+  double radius_m, double spacing_m, bool turn_right = true);
+
 bool segment_is_visible(
   const Point & a, const Point & b,
   const std::vector<KeepoutZone> & zones);

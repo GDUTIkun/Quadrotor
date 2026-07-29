@@ -59,7 +59,8 @@ double limit_with_min(double value, double max_abs, double min_abs);
 CommandResult compute_command(
   const RobotPose & robot,
   const std::vector<PathPoint> & path,
-  const ControllerConfig & config);
+  const ControllerConfig & config,
+  bool allow_goal_completion = true);
 
 PathPoint find_lookahead_point(
   const RobotPose & robot,
