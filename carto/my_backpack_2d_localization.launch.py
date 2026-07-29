@@ -11,6 +11,15 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time', default_value='false', description='Use simulation time'
     )
+    car_namespace_arg = DeclareLaunchArgument(
+        'car_namespace', default_value='car', description='Namespace for car Cartographer nodes'
+    )
+    scan_topic_arg = DeclareLaunchArgument(
+        'scan_topic', default_value='/car/scan', description='Car LaserScan topic'
+    )
+    imu_topic_arg = DeclareLaunchArgument(
+        'imu_topic', default_value='/car/imu/data_valid', description='Car IMU topic'
+    )
 
     load_state_filename_arg = DeclareLaunchArgument(
         'load_state_filename', default_value='/home/pi5/Desktop/map/my_map1.pbstream',
@@ -32,6 +41,7 @@ def generate_launch_description():
     cartographer_node = Node(
         package='cartographer_ros',
         executable='cartographer_node',
+        namespace=LaunchConfiguration('car_namespace'),
         name='cartographer_node',
         arguments=[
             '-configuration_directory',
@@ -40,8 +50,8 @@ def generate_launch_description():
             '-load_state_filename', LaunchConfiguration('load_state_filename')
         ],
         remappings=[
-            ('scan', 'scan'),
-            ('imu', '/track2vision/imu/data_valid')
+            ('scan', LaunchConfiguration('scan_topic')),
+            ('imu', LaunchConfiguration('imu_topic'))
         ],
         output='screen'
     )
@@ -49,6 +59,7 @@ def generate_launch_description():
     cartographer_occupancy_grid_node = Node(
         package='cartographer_ros',
         executable='cartographer_occupancy_grid_node',
+        namespace=LaunchConfiguration('car_namespace'),
         name='cartographer_occupancy_grid_node',
         arguments=['-resolution', '0.05', '-pure_localization', '1'],
         output='screen'
@@ -67,6 +78,9 @@ def generate_launch_description():
     return LaunchDescription([
         # Launch Arguments
         use_sim_time_arg,
+        car_namespace_arg,
+        scan_topic_arg,
+        imu_topic_arg,
         load_state_filename_arg,
         use_rviz_arg,
         # Nodes

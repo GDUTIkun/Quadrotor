@@ -35,8 +35,8 @@ public:
     tf_buffer_(get_clock()),
     tf_listener_(tf_buffer_)
   {
-    global_frame_id_ = declare_parameter<std::string>("global_frame_id", "map");
-    base_frame_id_ = declare_parameter<std::string>("base_frame_id", "base_link");
+    global_frame_id_ = declare_parameter<std::string>("global_frame_id", "car_carto_map");
+    base_frame_id_ = declare_parameter<std::string>("base_frame_id", "car_base_link");
     const double control_rate_hz = declare_parameter<double>("control_rate_hz", 20.0);
     config_.xy_tolerance_m = declare_parameter<double>("xy_tolerance_m", 0.05);
     config_.yaw_tolerance_rad = declare_parameter<double>("yaw_tolerance_rad", 0.0872665);
@@ -194,4 +194,3 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
-

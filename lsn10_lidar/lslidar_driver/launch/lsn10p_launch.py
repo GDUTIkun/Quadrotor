@@ -12,17 +12,24 @@ import os
 def generate_launch_description():
 
     driver_dir = os.path.join(get_package_share_directory('lslidar_driver'), 'params','lidar_uart_ros2', 'lsn10p.yaml')
-                     
+
+    frame_id = LaunchConfiguration('frame_id')
+    scan_topic = LaunchConfiguration('scan_topic')
+
     driver_node = LifecycleNode(package='lslidar_driver',
                                 executable='lslidar_driver_node',
                                 name='lslidar_driver_node',		#设置激光数据topic名称
                                 output='screen',
                                 emulate_tty=True,
                                 namespace='',
-                                parameters=[driver_dir],
+                                parameters=[driver_dir, {
+                                    'frame_id': frame_id,
+                                    'scan_topic': scan_topic,
+                                }],
                                 )
 
     return LaunchDescription([
+        DeclareLaunchArgument('frame_id', default_value='laser'),
+        DeclareLaunchArgument('scan_topic', default_value='/scan'),
         driver_node,
     ])
-

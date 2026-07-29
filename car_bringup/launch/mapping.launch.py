@@ -20,6 +20,16 @@ def generate_launch_description():
     pose_topic = LaunchConfiguration('pose_topic')
     pose_publish_rate_hz = LaunchConfiguration('pose_publish_rate_hz')
     pose_yaw_offset_rad = LaunchConfiguration('pose_yaw_offset_rad')
+    car_namespace = LaunchConfiguration('car_namespace')
+    carto_map_frame = LaunchConfiguration('carto_map_frame')
+    odom_frame = LaunchConfiguration('odom_frame')
+    base_frame = LaunchConfiguration('base_frame')
+    laser_frame = LaunchConfiguration('laser_frame')
+    scan_topic = LaunchConfiguration('scan_topic')
+    imu_topic = LaunchConfiguration('imu_topic')
+    cmd_vel_topic = LaunchConfiguration('cmd_vel_topic')
+    stm_status_topic = LaunchConfiguration('stm_status_topic')
+    wheel_odom_topic = LaunchConfiguration('wheel_odom_topic')
 
     laser_x = LaunchConfiguration('laser_x')
     laser_y = LaunchConfiguration('laser_y')
@@ -38,6 +48,12 @@ def generate_launch_description():
             'port': stm_port,
             'baudrate': stm_baudrate,
             'debug_rx_hex': debug_stm_rx,
+            'base_frame_id': base_frame,
+            'odom_frame_id': odom_frame,
+            'cmd_vel_topic': cmd_vel_topic,
+            'imu_topic': imu_topic,
+            'status_topic': stm_status_topic,
+            'wheel_odom_topic': wheel_odom_topic,
             'publish_wheel_odom': False,
             'publish_odom_tf': False,
         }],
@@ -52,6 +68,10 @@ def generate_launch_description():
             ])
         ),
         condition=IfCondition(start_lidar),
+        launch_arguments={
+            'frame_id': laser_frame,
+            'scan_topic': scan_topic,
+        }.items(),
     )
 
     carto_launch = IncludeLaunchDescription(
@@ -63,13 +83,18 @@ def generate_launch_description():
             ])
         ),
         condition=IfCondition(start_carto),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'car_namespace': car_namespace,
+            'scan_topic': scan_topic,
+            'imu_topic': imu_topic,
+        }.items(),
     )
 
     base_to_laser_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='base_link_to_laser_tf',
+        name='car_base_link_to_laser_tf',
         output='screen',
         arguments=[
             '--x', laser_x,
@@ -78,20 +103,20 @@ def generate_launch_description():
             '--roll', laser_roll,
             '--pitch', laser_pitch,
             '--yaw', laser_yaw,
-            '--frame-id', 'base_link',
-            '--child-frame-id', 'laser',
+            '--frame-id', base_frame,
+            '--child-frame-id', laser_frame,
         ],
     )
 
     carto_pose_publisher_node = Node(
         package='car_localization',
         executable='carto_pose_publisher_node',
-        name='carto_pose_publisher_node',
+        name='car_carto_pose_publisher_node',
         output='screen',
         condition=IfCondition(start_pose_publisher),
         parameters=[{
-            'global_frame_id': 'map',
-            'base_frame_id': 'base_link',
+            'global_frame_id': carto_map_frame,
+            'base_frame_id': base_frame,
             'output_frame_id': 'car_map',
             'pose_topic': pose_topic,
             'publish_rate_hz': pose_publish_rate_hz,
@@ -108,12 +133,22 @@ def generate_launch_description():
         DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
         DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
+        DeclareLaunchArgument('car_namespace', default_value='car'),
+        DeclareLaunchArgument('carto_map_frame', default_value='car_carto_map'),
+        DeclareLaunchArgument('odom_frame', default_value='car_odom'),
+        DeclareLaunchArgument('base_frame', default_value='car_base_link'),
+        DeclareLaunchArgument('laser_frame', default_value='car_laser'),
+        DeclareLaunchArgument('scan_topic', default_value='/car/scan'),
+        DeclareLaunchArgument('imu_topic', default_value='/car/imu/data_valid'),
+        DeclareLaunchArgument('cmd_vel_topic', default_value='/cmd_vel'),
+        DeclareLaunchArgument('stm_status_topic', default_value='/car/stm/status'),
+        DeclareLaunchArgument('wheel_odom_topic', default_value='/car/odom/wheel'),
         DeclareLaunchArgument('stm_port', default_value='/dev/ttyS0'),
         DeclareLaunchArgument('stm_baudrate', default_value='576000'),
         DeclareLaunchArgument('debug_stm_rx', default_value='false'),
-        DeclareLaunchArgument('laser_x', default_value='0.055'),
+        DeclareLaunchArgument('laser_x', default_value='0.06842'),
         DeclareLaunchArgument('laser_y', default_value='0.0'),
-        DeclareLaunchArgument('laser_z', default_value='0.015'),
+        DeclareLaunchArgument('laser_z', default_value='0.01246'),
         DeclareLaunchArgument('laser_roll', default_value='0.0'),
         DeclareLaunchArgument('laser_pitch', default_value='0.0'),
         DeclareLaunchArgument('laser_yaw', default_value='-1.5708'),

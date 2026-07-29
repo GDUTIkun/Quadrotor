@@ -56,8 +56,8 @@ public:
     tf_buffer_(this->get_clock()),
     tf_listener_(tf_buffer_)
   {
-    global_frame_id_ = declare_parameter<std::string>("global_frame_id", "map");
-    base_frame_id_ = declare_parameter<std::string>("base_frame_id", "base_link");
+    global_frame_id_ = declare_parameter<std::string>("global_frame_id", "car_carto_map");
+    base_frame_id_ = declare_parameter<std::string>("base_frame_id", "car_base_link");
     const auto obstacle_file = declare_parameter<std::string>("obstacle_file", "");
     robot_radius_m_ = declare_parameter<double>("robot_radius_m", 0.18);
     safety_margin_m_ = declare_parameter<double>("safety_margin_m", 0.08);
@@ -263,4 +263,3 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
-

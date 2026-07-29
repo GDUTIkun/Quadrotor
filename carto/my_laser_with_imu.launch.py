@@ -32,6 +32,9 @@ def generate_launch_description():
 
     ## ***** Launch arguments *****
     use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='false')
+    car_namespace_arg = DeclareLaunchArgument('car_namespace', default_value='car')
+    scan_topic_arg = DeclareLaunchArgument('scan_topic', default_value='/car/scan')
+    imu_topic_arg = DeclareLaunchArgument('imu_topic', default_value='/car/imu/data_valid')
 
     ## ***** File paths ******
     pkg_share = FindPackageShare('cartographer_ros')
@@ -66,6 +69,8 @@ def generate_launch_description():
     cartographer_node = Node(
         package='cartographer_ros',
         executable='cartographer_node',
+        namespace=LaunchConfiguration('car_namespace'),
+        name='cartographer_node',
         parameters=[
             {'use_sim_time': LaunchConfiguration('use_sim_time')},
             # 新增消息队列控制参数
@@ -83,8 +88,8 @@ def generate_launch_description():
         ],
 
         remappings=[
-            ('scan', 'scan'),
-            ('imu', '/track2vision/imu/data_valid')
+            ('scan', LaunchConfiguration('scan_topic')),
+            ('imu', LaunchConfiguration('imu_topic'))
         ],
         output='screen'
     )
@@ -93,6 +98,8 @@ def generate_launch_description():
     cartographer_occupancy_grid_node = Node(
         package='cartographer_ros',
         executable='cartographer_occupancy_grid_node',
+        namespace=LaunchConfiguration('car_namespace'),
+        name='cartographer_occupancy_grid_node',
         parameters=[
             {'use_sim_time': LaunchConfiguration('use_sim_time')},
             {'resolution': 0.05}  # 补全末尾逗号
@@ -115,7 +122,7 @@ def generate_launch_description():
     finish_trajectory_service = ExecuteProcess(
         cmd=[
             'ros2', 'service', 'call',
-            '/cartographer_node/finish_trajectory',
+            '/car/cartographer_node/finish_trajectory',
             'cartographer_ros_msgs/srv/FinishTrajectory',
             '{"trajectory_id": 0}'
         ],
@@ -141,6 +148,9 @@ def generate_launch_description():
     )
     return LaunchDescription([
         use_sim_time_arg,
+        car_namespace_arg,
+        scan_topic_arg,
+        imu_topic_arg,
 #        robot_state_publisher_node,
 #        joint_state_publisher_node,
 #        rviz_node,

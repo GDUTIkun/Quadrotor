@@ -251,21 +251,24 @@ public:
     cmd_timeout_s_ = declare_parameter<double>("cmd_timeout_s", 0.3);
     diagnostics_rate_hz_ = declare_parameter<double>("diagnostics_rate_hz", 1.0);
     debug_rx_hex_ = declare_parameter<bool>("debug_rx_hex", false);
-    base_frame_id_ = declare_parameter<std::string>("base_frame_id", "base_link");
-    odom_frame_id_ = declare_parameter<std::string>("odom_frame_id", "odom");
+    base_frame_id_ = declare_parameter<std::string>("base_frame_id", "car_base_link");
+    odom_frame_id_ = declare_parameter<std::string>("odom_frame_id", "car_odom");
+    const auto cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "/cmd_vel");
+    const auto imu_topic = declare_parameter<std::string>("imu_topic", "/car/imu/data_valid");
+    const auto status_topic = declare_parameter<std::string>("status_topic", "/car/stm/status");
+    const auto wheel_odom_topic =
+      declare_parameter<std::string>("wheel_odom_topic", "/car/odom/wheel");
     declare_parameter<bool>("publish_wheel_odom", false);
     declare_parameter<bool>("publish_odom_tf", false);
     publish_wheel_odom_enabled_ = as_bool(get_parameter("publish_wheel_odom"));
     publish_odom_tf_ = as_bool(get_parameter("publish_odom_tf"));
 
     cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      "/cmd_vel", 10, std::bind(&StmBridgeNode::on_cmd_vel, this, std::placeholders::_1));
-    imu_pub_ = create_publisher<sensor_msgs::msg::Imu>(
-      "/track2vision/imu/data_valid", 20);
-    status_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
-      "/stm/status", 10);
+      cmd_vel_topic, 10, std::bind(&StmBridgeNode::on_cmd_vel, this, std::placeholders::_1));
+    imu_pub_ = create_publisher<sensor_msgs::msg::Imu>(imu_topic, 20);
+    status_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(status_topic, 10);
     if (publish_wheel_odom_enabled_) {
-      odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/odom/wheel", 20);
+      odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(wheel_odom_topic, 20);
     }
     if (publish_wheel_odom_enabled_ && publish_odom_tf_) {
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
