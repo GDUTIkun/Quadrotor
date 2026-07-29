@@ -97,6 +97,7 @@ public:
     waypoint_tolerance_m_ = declare_parameter<double>("waypoint_tolerance_m", 0.08);
     goal_tolerance_m_ = declare_parameter<double>("goal_tolerance_m", 0.10);
     k_w_ = declare_parameter<double>("k_w", 0.6);
+    k_w_ff_ = declare_parameter<double>("k_w_ff", 1.0);
     k_w_rate_ = declare_parameter<double>("k_w_rate", 0.32);
     k_i_rate_ = declare_parameter<double>("k_i_rate", 0.9);
     k_d_rate_ = declare_parameter<double>("k_d_rate", 0.0);
@@ -131,6 +132,7 @@ public:
     lookahead_distance_m_ = std::max(0.01, lookahead_distance_m_);
     waypoint_tolerance_m_ = std::max(0.01, waypoint_tolerance_m_);
     goal_tolerance_m_ = std::max(0.01, goal_tolerance_m_);
+    k_w_ff_ = std::max(0.0, k_w_ff_);
     k_w_rate_ = std::max(0.0, k_w_rate_);
     k_i_rate_ = std::max(0.0, k_i_rate_);
     k_d_rate_ = std::max(0.0, k_d_rate_);
@@ -361,7 +363,9 @@ private:
     const double dy = target.y - pose_.y;
     const double target_yaw = std::atan2(dy, dx);
     const double yaw_error = normalize_angle(target_yaw - pose_.yaw);
-    const double target_w = std::clamp(k_w_ * yaw_error, -w_max_rad_s_, w_max_rad_s_);
+    const double yaw_rate_ff = yaw_rate_feedforward(total_progress_m_);
+    const double target_w = std::clamp(
+      yaw_rate_ff + k_w_ * yaw_error, -w_max_rad_s_, w_max_rad_s_);
 
     double w = target_w;
     last_w_error_ = 0.0;
@@ -390,6 +394,7 @@ private:
 
     last_target_ = target;
     last_yaw_error_ = yaw_error;
+    last_yaw_rate_ff_ = yaw_rate_ff;
     last_target_w_ = target_w;
     last_cmd_w_ = w;
     status_reason_ = use_rate_loop ? "tracking_rate_feedback" : "tracking_angle_only";
@@ -460,6 +465,25 @@ private:
     return path_[index];
   }
 
+  double yaw_rate_feedforward(double progress) const
+  {
+    if (lap_length_m_ <= 0.0 || radius_m_ <= 0.0) {
+      return 0.0;
+    }
+    const double lap_progress = std::fmod(std::max(0.0, progress), lap_length_m_);
+    const double upper_arc_start = straight_length_m_;
+    const double upper_arc_end = upper_arc_start + M_PI * radius_m_;
+    const double right_line_end = upper_arc_end + straight_length_m_;
+    const double lower_arc_end = right_line_end + M_PI * radius_m_;
+    const bool on_arc =
+      (lap_progress >= upper_arc_start && lap_progress < upper_arc_end) ||
+      (lap_progress >= right_line_end && lap_progress < lower_arc_end);
+    if (!on_arc) {
+      return 0.0;
+    }
+    return -k_w_ff_ * speed_m_s_ / radius_m_;
+  }
+
   void publish_stop()
   {
     cmd_pub_->publish(geometry_msgs::msg::Twist{});
@@ -514,6 +538,7 @@ private:
     completed_laps_ = 0;
     previous_lap_progress_m_ = 0.0;
     last_yaw_error_ = 0.0;
+    last_yaw_rate_ff_ = 0.0;
     last_target_w_ = 0.0;
     last_cmd_w_ = 0.0;
     last_w_error_ = 0.0;
@@ -538,10 +563,13 @@ private:
            << " index=" << current_index_ << "/" << path_.size()
            << " progress=" << total_progress_m_
            << " speed=" << speed_m_s_
+           << " k_w=" << k_w_
+           << " k_w_ff=" << k_w_ff_
            << " k_w_rate=" << k_w_rate_
            << " k_i_rate=" << k_i_rate_
            << " k_d_rate=" << k_d_rate_
            << " target_w=" << last_target_w_
+           << " yaw_rate_ff=" << last_yaw_rate_ff_
            << " measured_w=" << measured_w_rad_s_
            << " w_error=" << last_w_error_
            << " w_error_integral=" << w_error_integral_
@@ -565,6 +593,7 @@ private:
   double waypoint_tolerance_m_{0.08};
   double goal_tolerance_m_{0.10};
   double k_w_{0.6};
+  double k_w_ff_{1.0};
   double k_w_rate_{0.32};
   double k_i_rate_{0.9};
   double k_d_rate_{0.0};
@@ -595,6 +624,7 @@ private:
   double previous_lap_progress_m_{0.0};
   Point last_target_{};
   double last_yaw_error_{0.0};
+  double last_yaw_rate_ff_{0.0};
   double last_target_w_{0.0};
   double last_cmd_w_{0.0};
   double last_w_error_{0.0};

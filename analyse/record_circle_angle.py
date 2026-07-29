@@ -21,6 +21,7 @@ STATUS_RE = {
     "speed": re.compile(r"\bspeed=([-+0-9.eE]+)"),
     "lookahead": re.compile(r"\blookahead=([-+0-9.eE]+)"),
     "k_w": re.compile(r"\bk_w=([-+0-9.eE]+)"),
+    "k_w_ff": re.compile(r"\bk_w_ff=([-+0-9.eE]+)"),
     "k_w_rate": re.compile(r"\bk_w_rate=([-+0-9.eE]+)"),
     "k_i_rate": re.compile(r"\bk_i_rate=([-+0-9.eE]+)"),
     "k_d_rate": re.compile(r"\bk_d_rate=([-+0-9.eE]+)"),
@@ -30,6 +31,7 @@ STATUS_RE = {
     "target": re.compile(r"\btarget=\(([-+0-9.eE]+),([-+0-9.eE]+)\)"),
     "target_yaw": re.compile(r"\btarget_yaw=([-+0-9.eE]+)"),
     "yaw_error": re.compile(r"\byaw_error=([-+0-9.eE]+)"),
+    "yaw_rate_ff": re.compile(r"\byaw_rate_ff=([-+0-9.eE]+)"),
     "target_w": re.compile(r"\btarget_w=([-+0-9.eE]+)"),
     "measured_w": re.compile(r"\bmeasured_w=([-+0-9.eE]+)"),
     "w_error": re.compile(r"\bw_error=([-+0-9.eE]+)"),
@@ -112,6 +114,7 @@ def plot_circle_angle_csv(csv_path, plot_output=""):
             "pose_yaw": to_float(row.get("pose_yaw_rad")),
             "target_yaw": to_float(row.get("target_yaw_rad")),
             "yaw_error": yaw_error,
+            "yaw_rate_ff": to_float(row.get("yaw_rate_ff_rad_s")),
             "target_w": target_w,
             "measured_w": measured_w,
             "cmd_w": to_float(row.get("cmd_w_rad_s")),
@@ -130,6 +133,7 @@ def plot_circle_angle_csv(csv_path, plot_output=""):
     pose_yaw = [sample["pose_yaw"] for sample in samples]
     target_yaw = [sample["target_yaw"] for sample in samples]
     yaw_error = [sample["yaw_error"] for sample in samples]
+    yaw_rate_ff = [sample["yaw_rate_ff"] for sample in samples]
     target_w = [sample["target_w"] for sample in samples]
     measured_w = [sample["measured_w"] for sample in samples]
     cmd_w = [sample["cmd_w"] for sample in samples]
@@ -154,6 +158,8 @@ def plot_circle_angle_csv(csv_path, plot_output=""):
     axes[1].legend(loc="best")
 
     axes[2].plot(times, target_w, label="target_w", linewidth=1.5)
+    if any(value is not None for value in yaw_rate_ff):
+        axes[2].plot(times, yaw_rate_ff, label="yaw_rate_ff", linewidth=1.1)
     axes[2].plot(times, measured_w, label="measured_w", linewidth=1.5)
     if any(value is not None for value in cmd_w):
         axes[2].plot(times, cmd_w, label="cmd_w", linewidth=1.1)
@@ -220,6 +226,7 @@ class CircleAngleRecorder(Node):
             "linear_speed_m_s",
             "lookahead_m",
             "k_w",
+            "k_w_ff",
             "k_w_rate",
             "k_i_rate",
             "k_d_rate",
@@ -233,6 +240,7 @@ class CircleAngleRecorder(Node):
             "target_y",
             "target_yaw_rad",
             "yaw_error_rad",
+            "yaw_rate_ff_rad_s",
             "target_w_rad_s",
             "measured_w_rad_s",
             "w_error_rad_s",
@@ -296,6 +304,7 @@ class CircleAngleRecorder(Node):
             "linear_speed_m_s": float_or_blank(s.get("speed")),
             "lookahead_m": float_or_blank(s.get("lookahead")),
             "k_w": float_or_blank(s.get("k_w")),
+            "k_w_ff": float_or_blank(s.get("k_w_ff")),
             "k_w_rate": float_or_blank(s.get("k_w_rate")),
             "k_i_rate": float_or_blank(s.get("k_i_rate")),
             "k_d_rate": float_or_blank(s.get("k_d_rate")),
@@ -309,6 +318,7 @@ class CircleAngleRecorder(Node):
             "target_y": float_or_blank(s.get("target_y")),
             "target_yaw_rad": float_or_blank(s.get("target_yaw")),
             "yaw_error_rad": float_or_blank(s.get("yaw_error")),
+            "yaw_rate_ff_rad_s": float_or_blank(s.get("yaw_rate_ff")),
             "target_w_rad_s": float_or_blank(s.get("target_w")),
             "measured_w_rad_s": float_or_blank(s.get("measured_w")),
             "w_error_rad_s": float_or_blank(s.get("w_error")),

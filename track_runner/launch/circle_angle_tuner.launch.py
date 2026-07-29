@@ -10,6 +10,7 @@ def generate_launch_description():
         DeclareLaunchArgument('lookahead_distance_m', default_value='0.25'),
         DeclareLaunchArgument('linear_speed_m_s', default_value='0.03'),
         DeclareLaunchArgument('k_w', default_value='0.6'),
+        DeclareLaunchArgument('k_w_ff', default_value='1.0'),
         DeclareLaunchArgument('k_w_rate', default_value='0.32'),
         DeclareLaunchArgument('k_i_rate', default_value='0.9'),
         DeclareLaunchArgument('k_d_rate', default_value='0.0'),
@@ -31,6 +32,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'k_w_topic', default_value='/car/circle_angle_tuner/k_w'),
         DeclareLaunchArgument(
+            'k_w_ff_topic', default_value='/car/circle_angle_tuner/k_w_ff'),
+        DeclareLaunchArgument(
             'lookahead_topic', default_value='/car/circle_angle_tuner/lookahead'),
         DeclareLaunchArgument(
             'status_topic', default_value='/car/circle_angle_tuner/status'),
@@ -44,6 +47,7 @@ def generate_launch_description():
                 'lookahead_distance_m': LaunchConfiguration('lookahead_distance_m'),
                 'linear_speed_m_s': LaunchConfiguration('linear_speed_m_s'),
                 'k_w': LaunchConfiguration('k_w'),
+                'k_w_ff': LaunchConfiguration('k_w_ff'),
                 'k_w_rate': LaunchConfiguration('k_w_rate'),
                 'k_i_rate': LaunchConfiguration('k_i_rate'),
                 'k_d_rate': LaunchConfiguration('k_d_rate'),
@@ -62,6 +66,7 @@ def generate_launch_description():
                 'command_topic': LaunchConfiguration('command_topic'),
                 'speed_topic': LaunchConfiguration('speed_topic'),
                 'k_w_topic': LaunchConfiguration('k_w_topic'),
+                'k_w_ff_topic': LaunchConfiguration('k_w_ff_topic'),
                 'lookahead_topic': LaunchConfiguration('lookahead_topic'),
                 'status_topic': LaunchConfiguration('status_topic'),
             }],

@@ -25,6 +25,7 @@ STATUS_RE = {
     "target": re.compile(r"\btarget=\(([-+0-9.eE]+),([-+0-9.eE]+)\)"),
     "status_pose": re.compile(r"\bpose=\(([-+0-9.eE]+),([-+0-9.eE]+),([-+0-9.eE]+)\)"),
     "target_w": re.compile(r"\btarget_w=([-+0-9.eE]+)"),
+    "yaw_rate_ff": re.compile(r"\byaw_rate_ff=([-+0-9.eE]+)"),
     "measured_w": re.compile(r"\bmeasured_w=([-+0-9.eE]+)"),
     "cmd_w": re.compile(r"\bcmd_w=([-+0-9.eE]+)"),
     "yaw_error": re.compile(r"\byaw_error=([-+0-9.eE]+)"),
@@ -62,7 +63,7 @@ def parse_status(text):
         parsed["status_pose_y"] = float(match.group(2))
         parsed["status_pose_yaw"] = float(match.group(3))
 
-    for key in ("target_w", "measured_w", "cmd_w", "yaw_error"):
+    for key in ("target_w", "yaw_rate_ff", "measured_w", "cmd_w", "yaw_error"):
         match = STATUS_RE[key].search(text)
         if match:
             parsed[key] = float(match.group(1))
@@ -120,6 +121,7 @@ class XYRecorder(Node):
             "reason",
             "yaw_error_rad",
             "target_w_rad_s",
+            "yaw_rate_ff_rad_s",
             "measured_w_rad_s",
             "cmd_w_rad_s",
             "status_raw",
@@ -194,6 +196,7 @@ class XYRecorder(Node):
             "reason": status.get("reason", ""),
             "yaw_error_rad": float_or_blank(status.get("yaw_error")),
             "target_w_rad_s": float_or_blank(status.get("target_w")),
+            "yaw_rate_ff_rad_s": float_or_blank(status.get("yaw_rate_ff")),
             "measured_w_rad_s": float_or_blank(status.get("measured_w")),
             "cmd_w_rad_s": float_or_blank(status.get("cmd_w")),
             "status_raw": status.get("status_raw", ""),

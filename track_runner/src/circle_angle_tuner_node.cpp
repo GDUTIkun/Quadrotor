@@ -66,6 +66,7 @@ public:
     lookahead_distance_m_ = declare_parameter<double>("lookahead_distance_m", 0.25);
     linear_speed_m_s_ = declare_parameter<double>("linear_speed_m_s", 0.03);
     k_w_ = declare_parameter<double>("k_w", 0.6);
+    k_w_ff_ = declare_parameter<double>("k_w_ff", 1.0);
     k_w_rate_ = declare_parameter<double>("k_w_rate", 0.32);
     k_i_rate_ = declare_parameter<double>("k_i_rate", 0.9);
     k_d_rate_ = declare_parameter<double>("k_d_rate", 0.0);
@@ -88,6 +89,8 @@ public:
       declare_parameter<std::string>("speed_topic", "/car/circle_angle_tuner/speed");
     const auto k_w_topic =
       declare_parameter<std::string>("k_w_topic", "/car/circle_angle_tuner/k_w");
+    const auto k_w_ff_topic =
+      declare_parameter<std::string>("k_w_ff_topic", "/car/circle_angle_tuner/k_w_ff");
     const auto lookahead_topic =
       declare_parameter<std::string>("lookahead_topic", "/car/circle_angle_tuner/lookahead");
     const auto status_topic =
@@ -97,6 +100,7 @@ public:
     lookahead_distance_m_ = std::max(0.01, finite_or(lookahead_distance_m_, 0.25));
     linear_speed_m_s_ = std::max(0.0, finite_or(linear_speed_m_s_, 0.03));
     k_w_ = std::max(0.0, finite_or(k_w_, 0.6));
+    k_w_ff_ = std::max(0.0, finite_or(k_w_ff_, 1.0));
     k_w_rate_ = std::max(0.0, finite_or(k_w_rate_, 0.32));
     k_i_rate_ = std::max(0.0, finite_or(k_i_rate_, 0.9));
     k_d_rate_ = std::max(0.0, finite_or(k_d_rate_, 0.0));
@@ -122,6 +126,9 @@ public:
     k_w_sub_ = create_subscription<std_msgs::msg::Float64>(
       k_w_topic, 10,
       std::bind(&CircleAngleTunerNode::on_k_w, this, std::placeholders::_1));
+    k_w_ff_sub_ = create_subscription<std_msgs::msg::Float64>(
+      k_w_ff_topic, 10,
+      std::bind(&CircleAngleTunerNode::on_k_w_ff, this, std::placeholders::_1));
     lookahead_sub_ = create_subscription<std_msgs::msg::Float64>(
       lookahead_topic, 10,
       std::bind(&CircleAngleTunerNode::on_lookahead, this, std::placeholders::_1));
@@ -134,8 +141,8 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Circle angle tuner ready: radius=%.3f m speed=%.3f m/s k_w=%.3f k_rate=(%.3f, %.3f, %.3f)",
-      radius_m_, linear_speed_m_s_, k_w_, k_w_rate_, k_i_rate_, k_d_rate_);
+      "Circle angle tuner ready: radius=%.3f m speed=%.3f m/s k_w=%.3f k_w_ff=%.3f k_rate=(%.3f, %.3f, %.3f)",
+      radius_m_, linear_speed_m_s_, k_w_, k_w_ff_, k_w_rate_, k_i_rate_, k_d_rate_);
   }
 
 private:
@@ -206,6 +213,12 @@ private:
   void on_k_w(const std_msgs::msg::Float64::SharedPtr msg)
   {
     k_w_ = std::max(0.0, finite_or(msg->data, k_w_));
+    publish_status();
+  }
+
+  void on_k_w_ff(const std_msgs::msg::Float64::SharedPtr msg)
+  {
+    k_w_ff_ = std::max(0.0, finite_or(msg->data, k_w_ff_));
     publish_status();
   }
 
@@ -288,7 +301,9 @@ private:
     const double dy = last_target_.y - pose_.y;
     last_target_yaw_ = std::atan2(dy, dx);
     last_yaw_error_ = normalize_angle(last_target_yaw_ - pose_.yaw);
-    last_target_w_ = std::clamp(k_w_ * last_yaw_error_, -w_max_rad_s_, w_max_rad_s_);
+    last_yaw_rate_ff_ = k_w_ff_ * direction * linear_speed_m_s_ / radius_m_;
+    last_target_w_ = std::clamp(
+      last_yaw_rate_ff_ + k_w_ * last_yaw_error_, -w_max_rad_s_, w_max_rad_s_);
 
     last_w_error_ = last_target_w_ - measured_w_rad_s_;
     w_error_integral_ = std::clamp(
@@ -363,6 +378,7 @@ private:
            << " speed=" << linear_speed_m_s_
            << " lookahead=" << lookahead_distance_m_
            << " k_w=" << k_w_
+           << " k_w_ff=" << k_w_ff_
            << " k_w_rate=" << k_w_rate_
            << " k_i_rate=" << k_i_rate_
            << " k_d_rate=" << k_d_rate_
@@ -372,6 +388,7 @@ private:
            << " target=(" << last_target_.x << "," << last_target_.y << ")"
            << " target_yaw=" << last_target_yaw_
            << " yaw_error=" << last_yaw_error_
+           << " yaw_rate_ff=" << last_yaw_rate_ff_
            << " target_w=" << last_target_w_
            << " measured_w=" << measured_w_rad_s_
            << " w_error=" << last_w_error_
@@ -390,6 +407,7 @@ private:
   double lookahead_distance_m_{0.25};
   double linear_speed_m_s_{0.03};
   double k_w_{0.6};
+  double k_w_ff_{1.0};
   double k_w_rate_{0.32};
   double k_i_rate_{0.9};
   double k_d_rate_{0.0};
@@ -412,6 +430,7 @@ private:
   double measured_w_rad_s_{0.0};
   double last_target_yaw_{0.0};
   double last_yaw_error_{0.0};
+  double last_yaw_rate_ff_{0.0};
   double last_target_w_{0.0};
   double last_w_error_{0.0};
   double w_error_integral_{0.0};
@@ -433,6 +452,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr command_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr speed_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr k_w_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr k_w_ff_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr lookahead_sub_;
 };
 
