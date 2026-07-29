@@ -7,6 +7,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -15,6 +16,7 @@ add_executable(carto_pose_publisher_node src/carto_pose_publisher_node.cpp)
 target_compile_features(carto_pose_publisher_node PRIVATE cxx_std_17)
 ament_target_dependencies(carto_pose_publisher_node
   geometry_msgs
+  nav_msgs
   rclcpp
   tf2
   tf2_ros

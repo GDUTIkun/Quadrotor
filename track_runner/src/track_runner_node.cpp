@@ -1,6 +1,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
@@ -96,12 +97,17 @@ public:
     waypoint_tolerance_m_ = declare_parameter<double>("waypoint_tolerance_m", 0.08);
     goal_tolerance_m_ = declare_parameter<double>("goal_tolerance_m", 0.10);
     k_w_ = declare_parameter<double>("k_w", 1.8);
+    k_w_rate_ = declare_parameter<double>("k_w_rate", 1.0);
     w_max_rad_s_ = declare_parameter<double>("w_max_rad_s", 0.6);
     pose_timeout_s_ = declare_parameter<double>("pose_timeout_s", 0.5);
+    angular_velocity_timeout_s_ = declare_parameter<double>("angular_velocity_timeout_s", 0.35);
+    use_angular_velocity_feedback_ =
+      declare_parameter<bool>("use_angular_velocity_feedback", true);
     use_start_pose_as_origin_ = declare_parameter<bool>("use_start_pose_as_origin", true);
     const double control_rate_hz = declare_parameter<double>("control_rate_hz", 50.0);
 
     const auto pose_topic = declare_parameter<std::string>("pose_topic", "/car/pose");
+    const auto odom_topic = declare_parameter<std::string>("odom_topic", "/car/odom/carto");
     const auto cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "/cmd_vel");
     const auto command_topic =
       declare_parameter<std::string>("command_topic", "/car/track_runner/command");
@@ -120,6 +126,7 @@ public:
     lookahead_distance_m_ = std::max(0.01, lookahead_distance_m_);
     waypoint_tolerance_m_ = std::max(0.01, waypoint_tolerance_m_);
     goal_tolerance_m_ = std::max(0.01, goal_tolerance_m_);
+    k_w_rate_ = std::max(0.0, k_w_rate_);
     lap_length_m_ = 2.0 * straight_length_m_ + 2.0 * M_PI * radius_m_;
     build_path();
 
@@ -127,6 +134,8 @@ public:
     status_pub_ = create_publisher<std_msgs::msg::String>(status_topic, 10);
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       pose_topic, 20, std::bind(&TrackRunnerNode::on_pose, this, std::placeholders::_1));
+    odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      odom_topic, 20, std::bind(&TrackRunnerNode::on_odom, this, std::placeholders::_1));
     command_sub_ = create_subscription<std_msgs::msg::String>(
       command_topic, 10,
       std::bind(&TrackRunnerNode::on_command, this, std::placeholders::_1));
@@ -145,8 +154,9 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Closed-loop track runner ready: points=%zu lap=%.3f m speed=%.3f m/s laps=%d",
-      path_.size(), lap_length_m_, speed_m_s_, target_laps_);
+      "Closed-loop track runner ready: points=%zu lap=%.3f m speed=%.3f m/s laps=%d rate_feedback=%s",
+      path_.size(), lap_length_m_, speed_m_s_, target_laps_,
+      use_angular_velocity_feedback_ ? "on" : "off");
   }
 
 private:
@@ -220,6 +230,13 @@ private:
       quaternion_to_yaw(msg->pose.orientation)};
     has_pose_ = true;
     last_pose_time_ = now();
+  }
+
+  void on_odom(const nav_msgs::msg::Odometry::SharedPtr msg)
+  {
+    measured_w_rad_s_ = msg->twist.twist.angular.z;
+    has_angular_velocity_ = true;
+    last_angular_velocity_time_ = now();
   }
 
   void on_command(const std_msgs::msg::String::SharedPtr msg)
@@ -309,6 +326,12 @@ private:
     return has_pose_ && (now() - last_pose_time_).seconds() <= pose_timeout_s_;
   }
 
+  bool angular_velocity_is_fresh() const
+  {
+    return has_angular_velocity_ &&
+      (now() - last_angular_velocity_time_).seconds() <= angular_velocity_timeout_s_;
+  }
+
   void publish_tracking_command()
   {
     const auto robot = Point{pose_.x, pose_.y};
@@ -328,7 +351,17 @@ private:
     const double dy = target.y - pose_.y;
     const double target_yaw = std::atan2(dy, dx);
     const double yaw_error = normalize_angle(target_yaw - pose_.yaw);
-    const double w = std::clamp(k_w_ * yaw_error, -w_max_rad_s_, w_max_rad_s_);
+    const double target_w = std::clamp(k_w_ * yaw_error, -w_max_rad_s_, w_max_rad_s_);
+
+    double w = target_w;
+    last_w_error_ = 0.0;
+    const bool use_rate_loop = use_angular_velocity_feedback_ && angular_velocity_is_fresh();
+    if (use_rate_loop) {
+      last_w_error_ = target_w - measured_w_rad_s_;
+      w = std::clamp(
+        k_w_rate_ * last_w_error_,
+        -w_max_rad_s_, w_max_rad_s_);
+    }
 
     geometry_msgs::msg::Twist twist;
     twist.linear.x = speed_m_s_;
@@ -337,8 +370,9 @@ private:
 
     last_target_ = target;
     last_yaw_error_ = yaw_error;
+    last_target_w_ = target_w;
     last_cmd_w_ = w;
-    status_reason_ = "tracking";
+    status_reason_ = use_rate_loop ? "tracking_rate_feedback" : "tracking_angle_only";
   }
 
   void update_progress(const Point & robot)
@@ -418,7 +452,9 @@ private:
     completed_laps_ = 0;
     previous_lap_progress_m_ = 0.0;
     last_yaw_error_ = 0.0;
+    last_target_w_ = 0.0;
     last_cmd_w_ = 0.0;
+    last_w_error_ = 0.0;
     last_target_ = path_.empty() ? Point{} : path_.front();
     status_reason_ = "reset";
   }
@@ -438,6 +474,9 @@ private:
            << " index=" << current_index_ << "/" << path_.size()
            << " progress=" << total_progress_m_
            << " speed=" << speed_m_s_
+           << " target_w=" << last_target_w_
+           << " measured_w=" << measured_w_rad_s_
+           << " w_error=" << last_w_error_
            << " cmd_w=" << last_cmd_w_
            << " yaw_error=" << last_yaw_error_
            << " target=(" << last_target_.x << "," << last_target_.y << ")"
@@ -457,8 +496,11 @@ private:
   double waypoint_tolerance_m_{0.08};
   double goal_tolerance_m_{0.10};
   double k_w_{1.8};
+  double k_w_rate_{1.0};
   double w_max_rad_s_{0.6};
   double pose_timeout_s_{0.5};
+  double angular_velocity_timeout_s_{0.35};
+  bool use_angular_velocity_feedback_{true};
   bool use_start_pose_as_origin_{true};
   double lap_length_m_{};
   double origin_x_{0.0};
@@ -468,6 +510,9 @@ private:
   Pose2D pose_{};
   bool has_pose_{false};
   rclcpp::Time last_pose_time_{0, 0, RCL_ROS_TIME};
+  double measured_w_rad_s_{0.0};
+  bool has_angular_velocity_{false};
+  rclcpp::Time last_angular_velocity_time_{0, 0, RCL_ROS_TIME};
   std::vector<Point> path_;
   std::vector<double> cumulative_s_;
   std::size_t current_index_{0};
@@ -476,7 +521,9 @@ private:
   double previous_lap_progress_m_{0.0};
   Point last_target_{};
   double last_yaw_error_{0.0};
+  double last_target_w_{0.0};
   double last_cmd_w_{0.0};
+  double last_w_error_{0.0};
   std::string status_reason_{"idle"};
 
   rclcpp::Time last_status_time_{0, 0, RCL_ROS_TIME};
@@ -484,6 +531,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr command_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr speed_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr laps_sub_;

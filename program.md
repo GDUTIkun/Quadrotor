@@ -247,6 +247,7 @@ ROS 接口：
 | 方向 | Topic | 类型 | 说明 |
 | --- | --- | --- | --- |
 | 发布 | `/car/pose` | `geometry_msgs/msg/PoseStamped` | 小车在 `car_map` 坐标系下的位置和 yaw |
+| 发布 | `/car/odom/carto` | `nav_msgs/msg/Odometry` | 小车在 `car_map` 坐标系下的位置、yaw，以及由位姿差分得到并低通滤波后的速度 |
 
 坐标转换：
 
@@ -257,6 +258,20 @@ car_pose.z =  cartographer_pose.z
 car_pose.yaw = cartographer_yaw + pi/2 + yaw_offset_rad
 ```
 
+速度估计：
+
+```text
+vx_map = diff(car_pose.x) / dt
+vy_map = diff(car_pose.y) / dt
+wz     = normalize(diff(car_pose.yaw)) / dt
+
+再按当前 yaw 转到车体坐标，并使用一阶低通滤波：
+filtered = filtered + alpha * (raw - filtered)
+alpha    = dt / (velocity_filter_tau_s + dt)
+```
+
+若 TF 时间戳跳变、`dt <= 0` 或 `dt > max_velocity_dt_s`，速度滤波器重置为 0，避免 Cartographer 偶发跳变直接进入控制环。`/car/pose` 保持兼容发布；需要速度项的节点优先订阅 `/car/odom/carto`。
+
 默认参数：
 
 | 参数 | 默认值 | 说明 |
@@ -265,8 +280,13 @@ car_pose.yaw = cartographer_yaw + pi/2 + yaw_offset_rad
 | `base_frame_id` | `car_base_link` | 小车本体 frame |
 | `output_frame_id` | `car_map` | `/car/pose` 的 frame，轴定义为右/前/上 |
 | `pose_topic` | `/car/pose` | 对外发布的小车坐标 topic |
+| `odom_topic` | `/car/odom/carto` | 对外发布的 Cartographer 差分里程计 topic |
+| `odom_child_frame_id` | `car_base_link` | `/car/odom/carto` 的 child frame |
 | `publish_rate_hz` | `20.0` | 坐标发布频率 |
 | `yaw_offset_rad` | `0.0` | 实车确认后的额外 yaw 修正，默认不开 |
+| `publish_odom` | `true` | 是否发布带速度项的 `/car/odom/carto` |
+| `velocity_filter_tau_s` | `0.15` | 差分速度一阶低通时间常数 |
+| `max_velocity_dt_s` | `0.5` | 超过该采样间隔时重置速度滤波 |
 
 ### 3.5 `track_runner`
 
@@ -305,6 +325,7 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
 控制方式：
 
 - 节点订阅 `/car/pose` 获取当前 `x/y/yaw`。
+- 节点订阅 `/car/odom/carto` 获取当前角速度 `wz`，用于角速度内环；若该 topic 超时，则自动退回只有角度外环的控制。
 - 赛道离散为固定路径点，默认点距 `0.02 m`。
 - 控制循环中查找当前最近路径进度，并选取前方 `lookahead_distance_m` 的目标点。
 - 根据当前车头方向和目标点方向计算 `yaw_error`：
@@ -314,7 +335,20 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
   yaw_error  = normalize(target_yaw - pose.yaw)
   ```
 
-- 输出 `linear.x=speed`，`angular.z=clamp(k_w * yaw_error, -w_max_rad_s, w_max_rad_s)`。
+- 角度外环输出期望角速度：
+
+  ```text
+  target_w = clamp(k_w * yaw_error, -w_max_rad_s, w_max_rad_s)
+  ```
+
+- 角速度内环用 `/car/odom/carto.twist.twist.angular.z` 做反馈：
+
+  ```text
+  w_error = target_w - measured_w
+  cmd_w   = clamp(k_w_rate * w_error, -w_max_rad_s, w_max_rad_s)
+  ```
+
+- 输出 `linear.x=speed`，`angular.z=cmd_w`。
 - 当累计路径进度达到目标圈数后自动停车。
 
 角度追踪链路：
@@ -325,18 +359,24 @@ A=(0,0), B=(0,1.5), C=(1.5,1.5), D=(1.5,0)
   -> 当前路径进度 progress
   -> 前瞻目标点 target
   -> yaw_error
-  -> angular.z = k_w * yaw_error
+  -> target_w = k_w * yaw_error
+/car/odom/carto
+  -> measured_w
+target_w + measured_w
+  -> w_error
+  -> angular.z = k_w_rate * w_error
   -> stm_bridge
   -> STM 左右轮速度环
 ```
 
-因此当前 ROS 侧是 `yaw` 角度闭环，不是角速度闭环。Cartographer/`/car/pose` 提供的是位姿和 yaw，当前 `track_runner` 没有用 yaw 差分估计实际角速度，也没有做角速度误差闭环。`angular.z` 是 ROS 侧给 STM 的期望角速度，底层角速度执行主要依赖 STM 对左右轮速度环的控制。
+因此当前 ROS 侧是串级闭环：外环用路径前瞻点生成航向角误差，角度环给出期望角速度；内环用 Cartographer 转换后 odom 的差分滤波角速度做反馈，由角速度误差直接计算最终下发的 `angular.z`。STM 侧仍负责左右轮速度环，ROS 侧角速度内环用于补偿底盘实际转向跟随误差。
 
 ROS 接口：
 
 | 方向 | Topic | 类型 | 说明 |
 | --- | --- | --- | --- |
 | 订阅 | `/car/pose` | `geometry_msgs/msg/PoseStamped` | 闭环跟踪使用的当前位姿，坐标为右/前/上 |
+| 订阅 | `/car/odom/carto` | `nav_msgs/msg/Odometry` | 差分滤波后的当前角速度，用于角速度内环 |
 | 订阅 | `/car/track_runner/command` | `std_msgs/msg/String` | `start`、`pause`、`resume`、`stop`、`reset` |
 | 订阅 | `/car/track_runner/speed` | `std_msgs/msg/Float64` | 运行速度，单位 `m/s` |
 | 订阅 | `/car/track_runner/laps` | `std_msgs/msg/Int32` | 目标圈数，最小为 1 |
@@ -356,11 +396,15 @@ ROS 接口：
 | `waypoint_tolerance_m` | `0.05` | 路径进度更新容差 |
 | `goal_tolerance_m` | `0.05` | 终点停车容差 |
 | `k_w` | `0.6` | 航向误差到角速度的比例系数 |
+| `k_w_rate` | `1.0` | 角速度误差到角速度指令的比例系数 |
 | `w_max_rad_s` | `0.3` | 最大角速度 |
 | `pose_timeout_s` | `0.5` | `/car/pose` 超时时间，超时停车 |
+| `angular_velocity_timeout_s` | `0.35` | `/car/odom/carto` 角速度超时时间，超时退回角度外环 |
+| `use_angular_velocity_feedback` | `true` | 是否启用角速度内环 |
 | `use_start_pose_as_origin` | `true` | `start` 时用当前 `/car/pose` 作为 A 点 |
 | `control_rate_hz` | `50.0` | `/cmd_vel` 发布频率 |
 | `pose_topic` | `/car/pose` | 当前位姿 topic |
+| `odom_topic` | `/car/odom/carto` | 当前差分 odom topic |
 | `cmd_vel_topic` | `/cmd_vel` | 输出给 STM 的速度 topic |
 
 启动方式：

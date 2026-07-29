@@ -18,8 +18,10 @@ def generate_launch_description():
     load_state_filename = LaunchConfiguration('load_state_filename')
     obstacle_file = LaunchConfiguration('obstacle_file')
     pose_topic = LaunchConfiguration('pose_topic')
+    carto_odom_topic = LaunchConfiguration('carto_odom_topic')
     pose_publish_rate_hz = LaunchConfiguration('pose_publish_rate_hz')
     pose_yaw_offset_rad = LaunchConfiguration('pose_yaw_offset_rad')
+    pose_velocity_filter_tau_s = LaunchConfiguration('pose_velocity_filter_tau_s')
     car_namespace = LaunchConfiguration('car_namespace')
     carto_map_frame = LaunchConfiguration('carto_map_frame')
     odom_frame = LaunchConfiguration('odom_frame')
@@ -149,8 +151,12 @@ def generate_launch_description():
             'base_frame_id': base_frame,
             'output_frame_id': 'car_map',
             'pose_topic': pose_topic,
+            'odom_topic': carto_odom_topic,
+            'odom_child_frame_id': base_frame,
             'publish_rate_hz': pose_publish_rate_hz,
             'yaw_offset_rad': pose_yaw_offset_rad,
+            'publish_odom': True,
+            'velocity_filter_tau_s': pose_velocity_filter_tau_s,
         }],
     )
 
@@ -192,8 +198,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('obstacle_file', default_value=''),
         DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
+        DeclareLaunchArgument('carto_odom_topic', default_value='/car/odom/carto'),
         DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
+        DeclareLaunchArgument('pose_velocity_filter_tau_s', default_value='0.15'),
         DeclareLaunchArgument('car_namespace', default_value='car'),
         DeclareLaunchArgument('carto_map_frame', default_value='car_carto_map'),
         DeclareLaunchArgument('odom_frame', default_value='car_odom'),
