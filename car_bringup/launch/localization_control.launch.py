@@ -23,6 +23,7 @@ def generate_launch_description():
 
     stm_port = LaunchConfiguration('stm_port')
     stm_baudrate = LaunchConfiguration('stm_baudrate')
+    debug_stm_rx = LaunchConfiguration('debug_stm_rx')
 
     laser_x = LaunchConfiguration('laser_x')
     laser_y = LaunchConfiguration('laser_y')
@@ -40,6 +41,7 @@ def generate_launch_description():
         parameters=[{
             'port': stm_port,
             'baudrate': stm_baudrate,
+            'debug_rx_hex': debug_stm_rx,
             'publish_wheel_odom': False,
             'publish_odom_tf': False,
         }],
@@ -146,6 +148,7 @@ def generate_launch_description():
         DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
         DeclareLaunchArgument('stm_port', default_value='/dev/ttyS0'),
         DeclareLaunchArgument('stm_baudrate', default_value='576000'),
+        DeclareLaunchArgument('debug_stm_rx', default_value='false'),
         DeclareLaunchArgument('laser_x', default_value='0.055'),
         DeclareLaunchArgument('laser_y', default_value='0.0'),
         DeclareLaunchArgument('laser_z', default_value='0.015'),

@@ -77,6 +77,22 @@ PYTHONPATH=car/stm_bridge python3 -m stm_bridge.uart_loopback_test
 ros2 topic echo /stm/status
 ```
 
+`/stm/status` 会由 ROS 侧每秒发布一次通信诊断，即使还没有收到 STM 的 `STATUS` 帧也会发布。重点看：
+
+```text
+raw_rx_bytes      ROS 串口接收到的原始上行字节数
+rx_frames         通过帧头、长度和 CRC 的有效协议帧数
+imu_frames        成功解码并发布的 IMU 帧数
+crc_errors        CRC 错误数
+dropped_bytes     找不到帧头或重同步时丢弃的字节数
+```
+
+如果需要看 STM 回传原始字节：
+
+```bash
+ros2 launch stm_bridge stm_bridge.launch.py debug_rx_hex:=true
+```
+
 3. STM 再 50 Hz 发送 `IMU`。
 4. ROS 侧检查：
 

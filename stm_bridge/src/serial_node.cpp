@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <fcntl.h>
+#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -102,6 +103,23 @@ std::string hex16(std::uint16_t value)
   stream.width(4);
   stream.fill('0');
   stream << value;
+  return stream.str();
+}
+
+std::string hex_dump(const std::vector<std::uint8_t> & data, std::size_t max_len = 48)
+{
+  std::ostringstream stream;
+  const auto count = std::min(data.size(), max_len);
+  for (std::size_t i = 0; i < count; ++i) {
+    if (i > 0) {
+      stream << ' ';
+    }
+    stream << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+           << static_cast<int>(data[i]);
+  }
+  if (data.size() > max_len) {
+    stream << " ...";
+  }
   return stream.str();
 }
 
@@ -231,6 +249,8 @@ public:
     baudrate_ = declare_parameter<int>("baudrate", 576000);
     cmd_rate_hz_ = declare_parameter<double>("cmd_rate_hz", 50.0);
     cmd_timeout_s_ = declare_parameter<double>("cmd_timeout_s", 0.3);
+    diagnostics_rate_hz_ = declare_parameter<double>("diagnostics_rate_hz", 1.0);
+    debug_rx_hex_ = declare_parameter<bool>("debug_rx_hex", false);
     base_frame_id_ = declare_parameter<std::string>("base_frame_id", "base_link");
     odom_frame_id_ = declare_parameter<std::string>("odom_frame_id", "odom");
     declare_parameter<bool>("publish_wheel_odom", false);
@@ -262,6 +282,10 @@ public:
       std::chrono::milliseconds(2), std::bind(&StmBridgeNode::read_serial, this));
     reconnect_timer_ = create_wall_timer(
       std::chrono::seconds(1), std::bind(&StmBridgeNode::reconnect_if_needed, this));
+    diagnostics_timer_ = create_wall_timer(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(std::max(0.1, 1.0 / diagnostics_rate_hz_))),
+      std::bind(&StmBridgeNode::publish_diagnostics, this));
 
     RCLCPP_INFO(
       get_logger(),
@@ -335,6 +359,18 @@ private:
       serial_port_.close();
       return;
     }
+    if (data.empty()) {
+      return;
+    }
+
+    raw_rx_bytes_ += data.size();
+    has_raw_rx_ = true;
+    last_raw_rx_time_ = now();
+    if (debug_rx_hex_) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "STM RX raw %zu bytes: %s", data.size(), hex_dump(data).c_str());
+    }
 
     for (const auto & frame : parser_.feed(data)) {
       ++rx_frames_;
@@ -352,9 +388,11 @@ private:
       } else if (frame.msg_id == stm_bridge::kMsgStatus) {
         publish_status(frame.payload);
       } else {
+        ++unknown_frames_;
         RCLCPP_DEBUG(get_logger(), "Ignored unknown STM msg_id=0x%02X", frame.msg_id);
       }
     } catch (const std::runtime_error & exc) {
+      ++malformed_frames_;
       RCLCPP_WARN(
         get_logger(), "Dropped malformed STM frame 0x%02X: %s",
         frame.msg_id, exc.what());
@@ -364,6 +402,10 @@ private:
   void publish_imu(const std::vector<std::uint8_t> & payload)
   {
     const auto data = stm_bridge::decode_imu(payload);
+    ++imu_frames_;
+    has_imu_ = true;
+    last_imu_time_ = now();
+
     sensor_msgs::msg::Imu msg;
     msg.header.stamp = now();
     msg.header.frame_id = base_frame_id_;
@@ -425,28 +467,84 @@ private:
   void publish_status(const std::vector<std::uint8_t> & payload)
   {
     const auto data = stm_bridge::decode_status(payload);
+    ++status_frames_;
+    has_status_ = true;
+    last_status_time_ = now();
+    last_status_ = data;
+
+    publish_diagnostics();
+  }
+
+  void publish_diagnostics()
+  {
+    const auto stamp = now();
 
     diagnostic_msgs::msg::DiagnosticStatus status;
     status.name = "stm_bridge";
     status.hardware_id = port_;
-    status.level = data.error_flags ?
-      diagnostic_msgs::msg::DiagnosticStatus::ERROR :
-      diagnostic_msgs::msg::DiagnosticStatus::OK;
-    status.message = data.error_flags ? "error flags set" : "ok";
-    add_value(status, "voltage_mv", std::to_string(data.voltage_mv));
-    add_value(status, "current_ma", std::to_string(data.current_ma));
-    add_value(status, "state", std::to_string(data.state));
-    add_value(status, "error_flags", hex16(data.error_flags));
-    add_value(status, "stamp_ms", std::to_string(data.stamp_ms));
+    const auto error_flags = last_status_ ? last_status_->error_flags : 0U;
+    if (!serial_port_.is_open()) {
+      status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      status.message = "serial port is not open";
+    } else if (!has_raw_rx_) {
+      status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      status.message = "serial open, but no STM RX bytes";
+    } else if (rx_frames_ == 0U) {
+      status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      status.message = "STM RX bytes received, but no valid protocol frames";
+    } else if (!has_imu_) {
+      status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      status.message = "valid STM frames received, but no IMU frames";
+    } else if (error_flags != 0U) {
+      status.level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      status.message = "STM error flags set";
+    } else {
+      status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+      status.message = "ok";
+    }
+
+    add_value(status, "port", port_);
+    add_value(status, "baudrate", std::to_string(baudrate_));
+    add_value(status, "serial_open", serial_port_.is_open() ? "true" : "false");
+    add_value(status, "raw_rx_bytes", std::to_string(raw_rx_bytes_));
     add_value(status, "rx_frames", std::to_string(rx_frames_));
     add_value(status, "tx_frames", std::to_string(tx_frames_));
+    add_value(status, "imu_frames", std::to_string(imu_frames_));
+    add_value(status, "status_frames", std::to_string(status_frames_));
+    add_value(status, "unknown_frames", std::to_string(unknown_frames_));
+    add_value(status, "malformed_frames", std::to_string(malformed_frames_));
     add_value(status, "crc_errors", std::to_string(parser_.crc_errors()));
     add_value(status, "dropped_bytes", std::to_string(parser_.dropped_bytes()));
+    add_value(status, "parser_frames_received", std::to_string(parser_.frames_received()));
+    add_value(status, "seconds_since_raw_rx", age_string(stamp, has_raw_rx_, last_raw_rx_time_));
+    add_value(status, "seconds_since_imu", age_string(stamp, has_imu_, last_imu_time_));
+    add_value(status, "seconds_since_status", age_string(stamp, has_status_, last_status_time_));
+    if (last_status_) {
+      add_value(status, "voltage_mv", std::to_string(last_status_->voltage_mv));
+      add_value(status, "current_ma", std::to_string(last_status_->current_ma));
+      add_value(status, "state", std::to_string(last_status_->state));
+      add_value(status, "error_flags", hex16(last_status_->error_flags));
+      add_value(status, "stamp_ms", std::to_string(last_status_->stamp_ms));
+    } else {
+      add_value(status, "error_flags", hex16(0));
+      add_value(status, "stm_status", "not received");
+    }
 
     diagnostic_msgs::msg::DiagnosticArray msg;
-    msg.header.stamp = now();
+    msg.header.stamp = stamp;
     msg.status.push_back(status);
     status_pub_->publish(msg);
+  }
+
+  static std::string age_string(
+    const rclcpp::Time & now_time, bool valid, const rclcpp::Time & then_time)
+  {
+    if (!valid) {
+      return "never";
+    }
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(3) << (now_time - then_time).seconds();
+    return stream.str();
   }
 
   static void add_value(
@@ -463,16 +561,30 @@ private:
   int baudrate_{};
   double cmd_rate_hz_{};
   double cmd_timeout_s_{};
+  double diagnostics_rate_hz_{};
   std::string base_frame_id_;
   std::string odom_frame_id_;
+  bool debug_rx_hex_{};
   bool publish_wheel_odom_enabled_{};
   bool publish_odom_tf_{};
 
   SerialPort serial_port_;
   stm_bridge::FrameParser parser_;
   std::uint8_t seq_{};
+  std::uint64_t raw_rx_bytes_{};
   std::uint64_t tx_frames_{};
   std::uint64_t rx_frames_{};
+  std::uint64_t imu_frames_{};
+  std::uint64_t status_frames_{};
+  std::uint64_t unknown_frames_{};
+  std::uint64_t malformed_frames_{};
+  bool has_raw_rx_{};
+  bool has_imu_{};
+  bool has_status_{};
+  rclcpp::Time last_raw_rx_time_;
+  rclcpp::Time last_imu_time_;
+  rclcpp::Time last_status_time_;
+  std::optional<stm_bridge::StatusPayload> last_status_;
   geometry_msgs::msg::Twist last_cmd_;
   bool has_cmd_{};
   rclcpp::Time last_cmd_time_;
@@ -485,6 +597,7 @@ private:
   rclcpp::TimerBase::SharedPtr cmd_timer_;
   rclcpp::TimerBase::SharedPtr read_timer_;
   rclcpp::TimerBase::SharedPtr reconnect_timer_;
+  rclcpp::TimerBase::SharedPtr diagnostics_timer_;
 };
 
 int main(int argc, char ** argv)
