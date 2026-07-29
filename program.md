@@ -192,9 +192,10 @@ ROS 接口：
 | `xy_tolerance_m`        | `0.05`      | 到点距离阈值          |
 | `yaw_tolerance_rad`     | `0.087`     | 到点角度阈值，约 5 度 |
 | `heading_tolerance_rad` | `0.15`      | 前进前的航向阈值      |
-| `v_max_m_s`             | `0.25`      | 最大线速度            |
-| `w_max_rad_s`           | `0.8`       | 最大角速度            |
-| `v_min_m_s`             | `0.03`      | 最小有效线速度        |
+| `target_speed_m_s`      | `0.05`      | 测试路径跟踪匀速目标，实车可按需下调 |
+| `v_max_m_s`             | `0.05`      | 最大线速度            |
+| `w_max_rad_s`           | `0.5`       | 最大角速度            |
+| `v_min_m_s`             | `0.0`       | 最小有效线速度        |
 | `w_min_rad_s`           | `0.08`      | 最小有效角速度        |
 
 ### 3.3 `car_bringup`
@@ -230,7 +231,7 @@ car_bringup/launch/localization_control.launch.py
 - `car_base_link -> car_laser` 和 `car_base_link -> car_imu_link` 静态 TF。
 - Cartographer 纯定位。
 - `car_localization` 小车坐标发布节点。
-- `path_planner` 静态禁入区路径规划节点。
+- `path_planner` 无障碍几何路径节点，当前支持目标点直连、测试直线和测试圆弧。
 - `path_controller` 路径跟踪控制节点。
 
 ### 3.4 `car_localization`

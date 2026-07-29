@@ -15,9 +15,10 @@ struct ControllerConfig
   double lookahead_distance_m{0.35};
   double goal_slowdown_radius_m{0.40};
   double k_w{1.8};
-  double v_max_m_s{0.25};
-  double w_max_rad_s{0.8};
-  double v_min_m_s{0.03};
+  double target_speed_m_s{0.05};
+  double v_max_m_s{0.05};
+  double w_max_rad_s{0.5};
+  double v_min_m_s{0.0};
   double w_min_rad_s{0.08};
 };
 
@@ -75,4 +76,3 @@ std::pair<double, double> transform_to_base(
   const RobotPose & robot, const PathPoint & point);
 
 }  // namespace path_controller
-

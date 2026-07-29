@@ -51,6 +51,13 @@ std::vector<Point> simplify_path(
 
 double path_length(const std::vector<Point> & points);
 
+std::vector<Point> make_straight_path(
+  const Point & start, double yaw, double length_m, double spacing_m);
+
+std::vector<Point> make_arc_path(
+  const Point & start, double start_yaw, double radius_m,
+  double angle_rad, double spacing_m);
+
 bool segment_is_visible(
   const Point & a, const Point & b,
   const std::vector<KeepoutZone> & zones);
@@ -73,4 +80,3 @@ double orientation(const Point & a, const Point & b, const Point & c);
 bool same_point(const Point & a, const Point & b);
 
 }  // namespace path_planner
-

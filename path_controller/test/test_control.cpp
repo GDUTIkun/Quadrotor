@@ -40,14 +40,32 @@ TEST(PathControllerControl, TransformToBaseRespectsRobotYaw)
 
 TEST(PathControllerControl, ControllerTracksStraightPath)
 {
+  ControllerConfig config;
+  config.target_speed_m_s = 0.04;
+
   const auto result = compute_command(
     RobotPose{0.0, 0.0, 0.0},
     {PathPoint{0.0, 0.0, 0.0}, PathPoint{1.0, 0.0, 0.0}},
-    ControllerConfig{});
+    config);
 
   EXPECT_EQ(result.phase, "track_path");
-  EXPECT_GT(result.v, 0.0);
+  EXPECT_DOUBLE_EQ(result.v, 0.04);
   EXPECT_NEAR(result.w, 0.0, 1e-6);
+}
+
+TEST(PathControllerControl, ControllerLimitsTestSpeed)
+{
+  ControllerConfig config;
+  config.target_speed_m_s = 0.20;
+  config.v_max_m_s = 0.05;
+
+  const auto result = compute_command(
+    RobotPose{0.0, 0.0, 0.0},
+    {PathPoint{0.0, 0.0, 0.0}, PathPoint{1.0, 0.0, 0.0}},
+    config);
+
+  EXPECT_EQ(result.phase, "track_path");
+  EXPECT_DOUBLE_EQ(result.v, 0.05);
 }
 
 TEST(PathControllerControl, ControllerAlignsBeforeTracking)
@@ -73,4 +91,3 @@ TEST(PathControllerControl, ControllerReachesInsideTolerances)
   EXPECT_DOUBLE_EQ(result.v, 0.0);
   EXPECT_DOUBLE_EQ(result.w, 0.0);
 }
-

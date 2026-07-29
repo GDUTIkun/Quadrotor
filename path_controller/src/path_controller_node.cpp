@@ -47,9 +47,10 @@ public:
     config_.goal_slowdown_radius_m =
       declare_parameter<double>("goal_slowdown_radius_m", 0.40);
     config_.k_w = declare_parameter<double>("k_w", 1.8);
-    config_.v_max_m_s = declare_parameter<double>("v_max_m_s", 0.25);
-    config_.w_max_rad_s = declare_parameter<double>("w_max_rad_s", 0.8);
-    config_.v_min_m_s = declare_parameter<double>("v_min_m_s", 0.03);
+    config_.target_speed_m_s = declare_parameter<double>("target_speed_m_s", 0.05);
+    config_.v_max_m_s = declare_parameter<double>("v_max_m_s", 0.05);
+    config_.w_max_rad_s = declare_parameter<double>("w_max_rad_s", 0.5);
+    config_.v_min_m_s = declare_parameter<double>("v_min_m_s", 0.0);
     config_.w_min_rad_s = declare_parameter<double>("w_min_rad_s", 0.08);
 
     path_sub_ = create_subscription<nav_msgs::msg::Path>(

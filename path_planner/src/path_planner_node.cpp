@@ -1,6 +1,5 @@
 #include "path_planner/geometry.hpp"
 
-#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -8,10 +7,10 @@
 #include <tf2/time.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
-#include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
-#include <filesystem>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -37,15 +36,6 @@ geometry_msgs::msg::Quaternion yaw_to_quaternion(double yaw)
   return q;
 }
 
-std::vector<double> yaml_double_vector(const YAML::Node & node)
-{
-  std::vector<double> values;
-  for (const auto & item : node) {
-    values.push_back(item.as<double>());
-  }
-  return values;
-}
-
 }  // namespace
 
 class PathPlannerNode : public rclcpp::Node
@@ -58,15 +48,14 @@ public:
   {
     global_frame_id_ = declare_parameter<std::string>("global_frame_id", "car_carto_map");
     base_frame_id_ = declare_parameter<std::string>("base_frame_id", "car_base_link");
-    const auto obstacle_file = declare_parameter<std::string>("obstacle_file", "");
-    robot_radius_m_ = declare_parameter<double>("robot_radius_m", 0.18);
-    safety_margin_m_ = declare_parameter<double>("safety_margin_m", 0.08);
-    min_waypoint_spacing_m_ = declare_parameter<double>("min_waypoint_spacing_m", 0.10);
+    plan_mode_ = declare_parameter<std::string>("plan_mode", "goal");
+    path_spacing_m_ = declare_parameter<double>("path_spacing_m", 0.02);
     max_plan_length_m_ = declare_parameter<double>("max_plan_length_m", 20.0);
-
-    keepout_zones_ = load_keepout_zones(obstacle_file);
-    const double inflate_radius = robot_radius_m_ + safety_margin_m_;
-    inflated_zones_ = path_planner::inflate_zones(keepout_zones_, inflate_radius);
+    test_line_length_m_ = declare_parameter<double>("test_line_length_m", 0.5);
+    test_arc_radius_m_ = declare_parameter<double>("test_arc_radius_m", 0.3);
+    test_arc_angle_rad_ = declare_parameter<double>("test_arc_angle_rad", M_PI_2);
+    test_publish_rate_hz_ = declare_parameter<double>("test_publish_rate_hz", 2.0);
+    test_publish_repeats_ = declare_parameter<int>("test_publish_repeats", 20);
 
     goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       "/goal_pose", 10,
@@ -75,72 +64,96 @@ public:
     status_pub_ = create_publisher<std_msgs::msg::String>("/path_planner/status", 10);
 
     RCLCPP_INFO(
-      get_logger(), "Loaded %zu keepout zones; inflate_radius=%.3f m",
-      keepout_zones_.size(), inflate_radius);
+      get_logger(),
+      "Path planner mode=%s, spacing=%.3f m, no obstacle avoidance",
+      plan_mode_.c_str(), path_spacing_m_);
+
+    if (plan_mode_ != "goal") {
+      const double period_s = std::max(0.1, 1.0 / std::max(0.1, test_publish_rate_hz_));
+      timer_ = create_wall_timer(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::duration<double>(period_s)),
+        std::bind(&PathPlannerNode::publish_test_path, this));
+    }
   }
 
 private:
-  std::vector<path_planner::KeepoutZone> load_keepout_zones(
-    const std::string & obstacle_file) const
+  void publish_test_path()
   {
-    const auto config_path = resolve_obstacle_file(obstacle_file);
-    if (!std::filesystem::exists(config_path)) {
-      RCLCPP_WARN(
-        get_logger(), "Keepout zone file not found: %s; using no zones",
-        config_path.c_str());
-      return {};
+    if (!test_path_ready_ && !build_test_path()) {
+      return;
     }
 
-    const YAML::Node data = YAML::LoadFile(config_path);
-    const auto frame_id = data["frame_id"] ?
-      data["frame_id"].as<std::string>() : global_frame_id_;
-    if (frame_id != global_frame_id_) {
-      throw path_planner::PlanningError(
-        "Keepout zone frame \"" + frame_id + "\" does not match \"" +
-        global_frame_id_ + "\"");
-    }
+    path_pub_->publish(test_path_msg_);
+    std::ostringstream status;
+    status << "planned mode=" << plan_mode_
+           << " points=" << test_path_msg_.poses.size()
+           << " length=" << test_path_length_
+           << " publish=" << (test_publish_count_ + 1)
+           << "/" << test_publish_repeats_;
+    publish_status(status.str());
+    RCLCPP_INFO(
+      get_logger(), "Published %s test path with %zu points, length=%.3f m (%d/%d)",
+      plan_mode_.c_str(), test_path_msg_.poses.size(), test_path_length_,
+      test_publish_count_ + 1, test_publish_repeats_);
 
-    std::vector<path_planner::KeepoutZone> zones;
-    const YAML::Node raw_zones = data["keepout_zones"];
-    if (!raw_zones) {
-      return zones;
+    ++test_publish_count_;
+    if (timer_ && test_publish_count_ >= test_publish_repeats_) {
+      timer_->cancel();
     }
-
-    for (const auto & raw_zone : raw_zones) {
-      const auto name = raw_zone["name"] ?
-        raw_zone["name"].as<std::string>() :
-        "zone_" + std::to_string(zones.size());
-      const auto type = raw_zone["type"].as<std::string>();
-      if (type == "rectangle") {
-        zones.push_back(path_planner::rectangle_zone(
-          name,
-          yaml_double_vector(raw_zone["center"]),
-          yaml_double_vector(raw_zone["size"])));
-      } else if (type == "polygon") {
-        std::vector<std::vector<double>> points;
-        for (const auto & point : raw_zone["points"]) {
-          points.push_back(yaml_double_vector(point));
-        }
-        zones.push_back(path_planner::polygon_zone(name, points));
-      } else {
-        throw path_planner::PlanningError(
-          "Unsupported keepout zone type \"" + type + "\" for \"" + name + "\"");
-      }
-    }
-    return zones;
   }
 
-  std::string resolve_obstacle_file(const std::string & obstacle_file) const
+  bool build_test_path()
   {
-    std::filesystem::path path = obstacle_file.empty() ?
-      std::filesystem::path("keepout_zones.yaml") :
-      std::filesystem::path(obstacle_file);
-    if (path.is_absolute()) {
-      return path.string();
+    geometry_msgs::msg::TransformStamped transform;
+    try {
+      transform = tf_buffer_.lookupTransform(
+        global_frame_id_, base_frame_id_, tf2::TimePointZero);
+    } catch (const tf2::TransformException & exc) {
+      publish_status("failed reason=tf_unavailable");
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000, "Cannot lookup %s->%s: %s",
+        global_frame_id_.c_str(), base_frame_id_.c_str(), exc.what());
+      publish_empty_path();
+      return false;
     }
 
-    const auto share_dir = ament_index_cpp::get_package_share_directory("path_planner");
-    return (std::filesystem::path(share_dir) / "config" / path.filename()).string();
+    const path_planner::Point start{
+      transform.transform.translation.x,
+      transform.transform.translation.y};
+    const double start_yaw = quaternion_to_yaw(transform.transform.rotation);
+
+    std::vector<path_planner::Point> points;
+    double goal_yaw = start_yaw;
+    try {
+      if (plan_mode_ == "line" || plan_mode_ == "straight") {
+        points = path_planner::make_straight_path(
+          start, start_yaw, test_line_length_m_, path_spacing_m_);
+      } else if (plan_mode_ == "arc") {
+        points = path_planner::make_arc_path(
+          start, start_yaw, test_arc_radius_m_, test_arc_angle_rad_, path_spacing_m_);
+        goal_yaw = start_yaw + test_arc_angle_rad_;
+      } else {
+        publish_status("failed reason=unsupported_plan_mode mode=" + plan_mode_);
+        RCLCPP_ERROR(get_logger(), "Unsupported plan_mode: %s", plan_mode_.c_str());
+        publish_empty_path();
+        if (timer_) {
+          timer_->cancel();
+        }
+        return false;
+      }
+      check_plan_length(points);
+    } catch (const path_planner::PlanningError & exc) {
+      publish_status(std::string("failed reason=\"") + exc.what() + "\"");
+      RCLCPP_WARN(get_logger(), "Planning failed: %s", exc.what());
+      publish_empty_path();
+      return false;
+    }
+
+    test_path_msg_ = build_path_msg(points, goal_yaw);
+    test_path_length_ = path_planner::path_length(points);
+    test_path_ready_ = true;
+    return true;
   }
 
   void on_goal_pose(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -180,8 +193,7 @@ private:
     std::vector<path_planner::Point> points;
     try {
       points = path_planner::plan_path(
-        start, goal, inflated_zones_,
-        min_waypoint_spacing_m_, max_plan_length_m_);
+        start, goal, {}, path_spacing_m_, max_plan_length_m_);
     } catch (const path_planner::PlanningError & exc) {
       publish_status(std::string("failed reason=\"") + exc.what() + "\"");
       RCLCPP_WARN(get_logger(), "Planning failed: %s", exc.what());
@@ -192,10 +204,10 @@ private:
     path_pub_->publish(build_path_msg(points, goal_yaw));
     const double length = path_planner::path_length(points);
     std::ostringstream status;
-    status << "planned points=" << points.size() << " length=" << length;
+    status << "planned mode=goal points=" << points.size() << " length=" << length;
     publish_status(status.str());
     RCLCPP_INFO(
-      get_logger(), "Planned path with %zu points, length=%.3f m",
+      get_logger(), "Planned goal path with %zu points, length=%.3f m",
       points.size(), length);
   }
 
@@ -239,21 +251,36 @@ private:
     status_pub_->publish(msg);
   }
 
+  void check_plan_length(const std::vector<path_planner::Point> & points) const
+  {
+    const double length = path_planner::path_length(points);
+    if (length > max_plan_length_m_) {
+      throw path_planner::PlanningError(
+        "Planned path is too long: " + std::to_string(length) + " m");
+    }
+  }
+
   std::string global_frame_id_;
   std::string base_frame_id_;
-  double robot_radius_m_{};
-  double safety_margin_m_{};
-  double min_waypoint_spacing_m_{};
+  std::string plan_mode_;
+  double path_spacing_m_{};
   double max_plan_length_m_{};
-
-  std::vector<path_planner::KeepoutZone> keepout_zones_;
-  std::vector<path_planner::KeepoutZone> inflated_zones_;
+  double test_line_length_m_{};
+  double test_arc_radius_m_{};
+  double test_arc_angle_rad_{};
+  double test_publish_rate_hz_{};
+  int test_publish_repeats_{};
+  bool test_path_ready_{false};
+  int test_publish_count_{0};
+  double test_path_length_{0.0};
+  nav_msgs::msg::Path test_path_msg_;
 
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
 };
 
 int main(int argc, char ** argv)

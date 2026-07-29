@@ -319,6 +319,63 @@ double path_length(const std::vector<Point> & points)
   return length;
 }
 
+std::vector<Point> make_straight_path(
+  const Point & start, double yaw, double length_m, double spacing_m)
+{
+  if (length_m <= 0.0) {
+    throw PlanningError("Straight path length must be positive");
+  }
+  if (spacing_m <= 0.0) {
+    throw PlanningError("Path spacing must be positive");
+  }
+
+  const int steps = std::max(1, static_cast<int>(std::ceil(length_m / spacing_m)));
+  std::vector<Point> points;
+  points.reserve(static_cast<std::size_t>(steps) + 1);
+  for (int i = 0; i <= steps; ++i) {
+    const double s = length_m * static_cast<double>(i) / static_cast<double>(steps);
+    points.push_back(Point{
+      start.x + s * std::cos(yaw),
+      start.y + s * std::sin(yaw)});
+  }
+  return points;
+}
+
+std::vector<Point> make_arc_path(
+  const Point & start, double start_yaw, double radius_m,
+  double angle_rad, double spacing_m)
+{
+  if (radius_m <= 0.0) {
+    throw PlanningError("Arc radius must be positive");
+  }
+  if (std::abs(angle_rad) <= kEps) {
+    throw PlanningError("Arc angle must be non-zero");
+  }
+  if (spacing_m <= 0.0) {
+    throw PlanningError("Path spacing must be positive");
+  }
+
+  const double arc_length = radius_m * std::abs(angle_rad);
+  const int steps = std::max(1, static_cast<int>(std::ceil(arc_length / spacing_m)));
+  const double direction = angle_rad > 0.0 ? 1.0 : -1.0;
+  const Point center{
+    start.x - direction * radius_m * std::sin(start_yaw),
+    start.y + direction * radius_m * std::cos(start_yaw)};
+  const double radial_start = start_yaw - direction * M_PI * 0.5;
+
+  std::vector<Point> points;
+  points.reserve(static_cast<std::size_t>(steps) + 1);
+  for (int i = 0; i <= steps; ++i) {
+    const double theta =
+      angle_rad * static_cast<double>(i) / static_cast<double>(steps);
+    const double radial = radial_start + theta;
+    points.push_back(Point{
+      center.x + radius_m * std::cos(radial),
+      center.y + radius_m * std::sin(radial)});
+  }
+  return points;
+}
+
 bool segment_is_visible(
   const Point & a, const Point & b,
   const std::vector<KeepoutZone> & zones)
@@ -419,4 +476,3 @@ bool same_point(const Point & a, const Point & b)
 }
 
 }  // namespace path_planner
-

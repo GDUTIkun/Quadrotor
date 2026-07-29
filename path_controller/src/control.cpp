@@ -76,21 +76,15 @@ CommandResult compute_command(
       target.x, target.y};
   }
 
-  const double speed_scale = std::min(
-    1.0, std::max(0.0, distance_to_goal / config.goal_slowdown_radius_m));
-  double v = config.v_max_m_s * speed_scale;
-  if (v > 0.0) {
-    v = std::max(config.v_min_m_s, v);
+  double v = std::min(std::abs(config.target_speed_m_s), config.v_max_m_s);
+  if (v > 0.0 && v < config.v_min_m_s) {
+    v = config.v_min_m_s;
   }
 
   const double lookahead = std::max(
     {config.lookahead_distance_m, std::hypot(base_x, base_y), 1e-6});
   const double curvature = 2.0 * base_y / (lookahead * lookahead);
   const double w = limit(v * curvature, config.w_max_rad_s);
-
-  const double turn_scale =
-    std::max(0.35, 1.0 - std::abs(w) / std::max(config.w_max_rad_s, 1e-6));
-  v = std::max(config.v_min_m_s, std::min(config.v_max_m_s, v * turn_scale));
 
   return CommandResult{
     v, w, false, "track_path", distance_to_goal, heading_error, target.x, target.y};
