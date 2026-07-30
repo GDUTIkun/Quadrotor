@@ -30,12 +30,20 @@ public:
     declare_parameter<double>("takeoff_tolerance", 0.10);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
-    declare_parameter<double>("follow_tolerance", 0.1);
+    declare_parameter<double>("follow_tolerance", 0.08);
     declare_parameter<double>("follow_stable_time", 2.0);
-    declare_parameter<double>("drop_height", 0.5);
+    declare_parameter<double>("drop_height", 0.8);
     declare_parameter<double>("mission_z_speed", 0.05);
+    declare_parameter<double>("drop_xy_stable_time", 1.0);
     declare_parameter<double>("release_wait_time", 1.0);
-    declare_parameter<double>("return_tolerance", 0.1);
+    declare_parameter<double>("return_tolerance", 0.08);
+    declare_parameter<double>("land_request_height", 0.5);
+    declare_parameter<double>("setpoint_lowpass_min_tau", 0.0);
+    declare_parameter<double>("setpoint_lowpass_near_error", 0.3);
+    declare_parameter<double>("setpoint_lowpass_near_tau", 0.6);
+    declare_parameter<double>("setpoint_lowpass_far_error", 2.0);
+    declare_parameter<double>("setpoint_lowpass_far_tau", 1.2);
+    declare_parameter<double>("setpoint_snap_tolerance", 0.05);
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
     declare_parameter<double>("release_angle", 0.0);
     declare_parameter<std::string>("land_mode", "AUTO.LAND");
@@ -130,8 +138,15 @@ private:
     RELEASE_PAYLOAD,
     ASCEND_AFTER_DROP,
     RETURN_HOME,
+    DESCEND_FOR_LAND,
     LAND,
     COMPLETE
+  };
+
+  struct Target {
+    double x;
+    double y;
+    double z;
   };
 
   void timer_callback()
@@ -184,14 +199,19 @@ private:
         break;
 
       case Phase::DESCEND_FOR_DROP:
-        follow_vehicle(slow_z_setpoint(drop_height()));
-        if (height_reached(drop_height())) {
+        follow_vehicle(drop_height());
+        if (!height_reached(drop_height())) {
+          drop_xy_stable_ = false;
+          break;
+        }
+        if (drop_xy_stable_for_release()) {
           publish_release_once();
           release_started_time_ = now();
           phase_ = Phase::RELEASE_PAYLOAD;
           RCLCPP_INFO(
-            get_logger(), "Drop height reached at %.2f m; releasing payload",
-            drop_height());
+            get_logger(),
+            "Drop height reached at %.2f m and XY stable for %.1f s; releasing payload",
+            drop_height(), drop_xy_stable_time());
         }
         break;
 
@@ -208,6 +228,7 @@ private:
       case Phase::ASCEND_AFTER_DROP:
         follow_vehicle(slow_z_setpoint(target_z));
         if (height_reached(target_z)) {
+          initialize_return_filter(target_z);
           phase_ = Phase::RETURN_HOME;
           RCLCPP_INFO(get_logger(), "Original height restored; returning to takeoff point");
         }
@@ -216,14 +237,28 @@ private:
       case Phase::RETURN_HOME:
         publish_position(start_x_, start_y_, target_z);
         if (home_reached(target_z)) {
+          land_stable_ = false;
+          phase_ = Phase::DESCEND_FOR_LAND;
+          RCLCPP_INFO(
+            get_logger(), "Takeoff point reached; descending to %.2f m before landing",
+            land_request_height());
+        }
+        break;
+
+      case Phase::DESCEND_FOR_LAND:
+        publish_position(start_x_, start_y_, land_request_height());
+        if (ready_to_request_land(land_request_height())) {
           phase_ = Phase::LAND;
           last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
-          RCLCPP_INFO(get_logger(), "Takeoff point reached; requesting landing");
+          RCLCPP_INFO(
+            get_logger(),
+            "Landing request height reached and home stable for %.1f s; requesting landing",
+            follow_stable_time());
         }
         break;
 
       case Phase::LAND:
-        handle_landing(target_z);
+        handle_landing(land_request_height());
         break;
 
       case Phase::COMPLETE:
@@ -303,6 +338,52 @@ private:
     return horizontal_error <= return_tolerance() && height_reached(target_z);
   }
 
+  bool drop_xy_stable_for_release()
+  {
+    if (vehicle_follow_locked_ || !vehicle_pose_fresh()) {
+      drop_xy_stable_ = false;
+      return false;
+    }
+
+    const double error = std::hypot(
+      pose_.pose.position.x - hold_x_, pose_.pose.position.y - hold_y_);
+    if (error > follow_tolerance()) {
+      drop_xy_stable_ = false;
+      return false;
+    }
+
+    if (!drop_xy_stable_) {
+      drop_xy_stable_ = true;
+      drop_xy_stable_since_ = now();
+      RCLCPP_INFO(
+        get_logger(), "Drop XY target reached (error %.3f m); checking stability", error);
+      return false;
+    }
+
+    return (now() - drop_xy_stable_since_).seconds() >= drop_xy_stable_time();
+  }
+
+  bool ready_to_request_land(double target_z)
+  {
+    const double horizontal_error = std::hypot(
+      pose_.pose.position.x - start_x_, pose_.pose.position.y - start_y_);
+    if (horizontal_error > return_tolerance() || !height_reached(target_z)) {
+      land_stable_ = false;
+      return false;
+    }
+
+    if (!land_stable_) {
+      land_stable_ = true;
+      land_stable_since_ = now();
+      RCLCPP_INFO(
+        get_logger(), "Landing pre-check reached (xy error %.3f m); checking stability",
+        horizontal_error);
+      return false;
+    }
+
+    return (now() - land_stable_since_).seconds() >= follow_stable_time();
+  }
+
   void publish_release_once()
   {
     if (payload_released_) {
@@ -367,6 +448,12 @@ private:
 
   void publish_position(double x, double y, double z)
   {
+    update_lowpass_setpoint(Target{x, y, z});
+    publish_raw_position(shaped_x_, shaped_y_, shaped_z_);
+  }
+
+  void publish_raw_position(double x, double y, double z)
+  {
     mavros_msgs::msg::PositionTarget msg;
     msg.header.stamp = now();
     msg.header.frame_id = "map";
@@ -383,6 +470,122 @@ private:
     msg.position.z = z;
     msg.yaw = initial_yaw_;
     setpoint_pub_->publish(msg);
+  }
+
+  void initialize_return_filter(double target_z)
+  {
+    const Target start{
+      pose_received_ ? pose_.pose.position.x : hold_x_,
+      pose_received_ ? pose_.pose.position.y : hold_y_,
+      target_z,
+    };
+
+    shaped_x_ = start.x;
+    shaped_y_ = start.y;
+    shaped_z_ = start.z;
+    lowpass_target_ = start;
+    shaped_setpoint_initialized_ = true;
+    lowpass_target_initialized_ = true;
+    active_lowpass_tau_ = 0.0;
+    last_shaping_time_ = now();
+  }
+
+  void update_lowpass_setpoint(const Target & target)
+  {
+    const auto current_time = now();
+    if (!shaped_setpoint_initialized_) {
+      shaped_x_ = target.x;
+      shaped_y_ = target.y;
+      shaped_z_ = target.z;
+      shaped_setpoint_initialized_ = true;
+      lowpass_target_ = target;
+      lowpass_target_initialized_ = true;
+      last_shaping_time_ = current_time;
+      return;
+    }
+
+    const double dt = std::clamp(
+      (current_time - last_shaping_time_).seconds(), 0.001, 0.1);
+    last_shaping_time_ = current_time;
+
+    if (!lowpass_target_initialized_ || !targets_match(target, lowpass_target_)) {
+      const double target_step_distance = distance_between_lowpass_targets(target);
+      active_lowpass_tau_ = calculate_lowpass_tau(target_step_distance);
+      lowpass_target_ = target;
+      lowpass_target_initialized_ = true;
+
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "Setpoint low-pass tau %.2f selected from target step distance %.2f m.",
+        active_lowpass_tau_, target_step_distance);
+    }
+
+    const double dx = target.x - shaped_x_;
+    const double dy = target.y - shaped_y_;
+    shaped_z_ = target.z;
+    const double distance = std::sqrt(dx * dx + dy * dy);
+    const double snap_tolerance =
+      std::max(0.0, get_parameter("setpoint_snap_tolerance").as_double());
+
+    if (distance <= snap_tolerance) {
+      shaped_x_ = target.x;
+      shaped_y_ = target.y;
+      return;
+    }
+
+    const double tau = active_lowpass_tau_;
+    if (tau <= 0.0) {
+      shaped_x_ = target.x;
+      shaped_y_ = target.y;
+      return;
+    }
+
+    const double alpha = dt / (tau + dt);
+    shaped_x_ += alpha * dx;
+    shaped_y_ += alpha * dy;
+  }
+
+  double distance_between_lowpass_targets(const Target & target) const
+  {
+    if (!lowpass_target_initialized_) {
+      return 0.0;
+    }
+
+    const double dx = target.x - lowpass_target_.x;
+    const double dy = target.y - lowpass_target_.y;
+    return std::sqrt(dx * dx + dy * dy);
+  }
+
+  static bool targets_match(const Target & lhs, const Target & rhs)
+  {
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+  }
+
+  double calculate_lowpass_tau(double distance) const
+  {
+    const double near_error =
+      std::max(0.0, get_parameter("setpoint_lowpass_near_error").as_double());
+    const double far_error =
+      std::max(near_error, get_parameter("setpoint_lowpass_far_error").as_double());
+    const double min_tau = get_parameter("setpoint_lowpass_min_tau").as_double();
+    const double near_tau = get_parameter("setpoint_lowpass_near_tau").as_double();
+    const double far_tau = get_parameter("setpoint_lowpass_far_tau").as_double();
+
+    if (distance <= near_error) {
+      if (near_error <= 0.0) {
+        return near_tau;
+      }
+      const double ratio = std::clamp(distance / near_error, 0.0, 1.0);
+      return min_tau + ratio * (near_tau - min_tau);
+    }
+
+    if (far_error <= near_error) {
+      return distance >= far_error ? far_tau : near_tau;
+    }
+
+    const double ratio =
+      std::clamp((distance - near_error) / (far_error - near_error), 0.0, 1.0);
+    return near_tau + ratio * (far_tau - near_tau);
   }
 
   void publish_track_start_once()
@@ -459,10 +662,21 @@ private:
       get_parameter("drop_height").as_double(), 0.2, flight_height());
   }
 
+  double land_request_height() const
+  {
+    return std::clamp(
+      get_parameter("land_request_height").as_double(), 0.2, flight_height());
+  }
+
   double mission_z_speed() const
   {
     return std::clamp(
       get_parameter("mission_z_speed").as_double(), 0.05, 1.0);
+  }
+
+  double drop_xy_stable_time() const
+  {
+    return std::max(0.0, get_parameter("drop_xy_stable_time").as_double());
   }
 
   double release_wait_time() const
@@ -503,8 +717,12 @@ private:
   bool vehicle_follow_locked_{false};
   bool track_start_sent_{false};
   bool follow_stable_{false};
+  bool drop_xy_stable_{false};
+  bool land_stable_{false};
   bool payload_released_{false};
   bool slow_z_active_{false};
+  bool shaped_setpoint_initialized_{false};
+  bool lowpass_target_initialized_{false};
   int stream_count_{0};
   double start_x_{0.0};
   double start_y_{0.0};
@@ -514,11 +732,19 @@ private:
   double hold_x_{0.0};
   double hold_y_{0.0};
   double slow_z_command_{0.0};
+  double shaped_x_{0.0};
+  double shaped_y_{0.0};
+  double shaped_z_{0.0};
+  Target lowpass_target_{0.0, 0.0, 0.0};
+  double active_lowpass_tau_{0.0};
   rclcpp::Time last_request_time_;
   rclcpp::Time last_vehicle_time_;
   rclcpp::Time follow_stable_since_;
+  rclcpp::Time drop_xy_stable_since_;
+  rclcpp::Time land_stable_since_;
   rclcpp::Time release_started_time_;
   rclcpp::Time slow_z_last_update_;
+  rclcpp::Time last_shaping_time_;
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr vehicle_pose_sub_;
