@@ -31,7 +31,7 @@ public:
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
     declare_parameter<double>("follow_tolerance", 0.08);
-    declare_parameter<double>("follow_stable_time", 1.0);
+    declare_parameter<double>("follow_stable_time", 1.5);
     declare_parameter<double>("drop_trigger_x", 1.5);
     declare_parameter<double>("drop_trigger_y", 1.5);
     declare_parameter<double>("drop_trigger_tolerance", 0.3);
@@ -48,6 +48,8 @@ public:
     declare_parameter<double>("setpoint_lowpass_far_tau", 2.3);
     declare_parameter<double>("setpoint_snap_tolerance", 0.05);
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
+    declare_parameter<std::string>("status_topic", "/offboard_task1/status");
+    declare_parameter<double>("status_publish_period", 1.0);
     declare_parameter<double>("release_angle", 0.0);
     declare_parameter<std::string>("land_mode", "AUTO.LAND");
     declare_parameter<bool>("auto_set_mode", true);
@@ -117,6 +119,9 @@ public:
       get_parameter("track_command_topic").as_string(), 10);
     servo_angle_pub_ = create_publisher<std_msgs::msg::Float64>(
       get_parameter("servo_topic").as_string(), 10);
+    status_pub_ = create_publisher<std_msgs::msg::String>(
+      get_parameter("status_topic").as_string(),
+      rclcpp::QoS(1).reliable().transient_local());
     set_mode_client_ = create_client<mavros_msgs::srv::SetMode>("mavros/set_mode");
     arm_client_ = create_client<mavros_msgs::srv::CommandBool>("mavros/cmd/arming");
 
@@ -155,10 +160,12 @@ private:
   void timer_callback()
   {
     if (!state_.connected) {
+      publish_status_if_needed();
       return;
     }
     if (!pose_received_ || !reference_captured_) {
       phase_ = Phase::WAIT_FOR_POSE;
+      publish_status_if_needed();
       return;
     }
 
@@ -267,6 +274,60 @@ private:
       case Phase::COMPLETE:
         break;
     }
+    publish_status_if_needed();
+  }
+
+  void publish_status_if_needed()
+  {
+    const auto status = mission_status();
+    const auto current_time = now();
+    const bool status_changed = status != last_status_;
+    const bool publish_period_elapsed =
+      last_status_publish_time_.nanoseconds() == 0 ||
+      (current_time - last_status_publish_time_).seconds() >= status_publish_period();
+
+    if (!status_changed && !publish_period_elapsed) {
+      return;
+    }
+
+    std_msgs::msg::String message;
+    message.data = status;
+    status_pub_->publish(message);
+    last_status_ = status;
+    last_status_publish_time_ = current_time;
+  }
+
+  std::string mission_status() const
+  {
+    if (vehicle_follow_locked_) {
+      return "FAULT";
+    }
+
+    switch (phase_) {
+      case Phase::WAIT_FOR_POSE:
+      case Phase::STREAM_SETPOINTS:
+      case Phase::ARM_AND_OFFBOARD:
+      case Phase::TAKEOFF:
+        return "TAKEOFF";
+
+      case Phase::FOLLOW:
+        return "FOLLOW";
+
+      case Phase::DESCEND_FOR_DROP:
+      case Phase::RELEASE_PAYLOAD:
+      case Phase::ASCEND_AFTER_DROP:
+        return "DROP";
+
+      case Phase::RETURN_HOME:
+      case Phase::DESCEND_FOR_LAND:
+      case Phase::LAND:
+        return "LAND";
+
+      case Phase::COMPLETE:
+        return "COMPLETE";
+    }
+
+    return "FAULT";
   }
 
   void check_follow_complete()
@@ -695,6 +756,11 @@ private:
     return std::max(0.0, get_parameter("release_wait_time").as_double());
   }
 
+  double status_publish_period() const
+  {
+    return std::max(0.1, get_parameter("status_publish_period").as_double());
+  }
+
   double return_tolerance() const
   {
     return std::max(0.02, get_parameter("return_tolerance").as_double());
@@ -748,6 +814,7 @@ private:
   double shaped_z_{0.0};
   Target lowpass_target_{0.0, 0.0, 0.0};
   double active_lowpass_tau_{0.0};
+  std::string last_status_;
   rclcpp::Time last_request_time_;
   rclcpp::Time last_vehicle_time_;
   rclcpp::Time drop_xy_stable_since_;
@@ -755,12 +822,14 @@ private:
   rclcpp::Time release_started_time_;
   rclcpp::Time slow_z_last_update_;
   rclcpp::Time last_shaping_time_;
+  rclcpp::Time last_status_publish_time_;
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr vehicle_pose_sub_;
   rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr setpoint_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr track_command_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr servo_angle_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
   rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arm_client_;
   rclcpp::TimerBase::SharedPtr timer_;
