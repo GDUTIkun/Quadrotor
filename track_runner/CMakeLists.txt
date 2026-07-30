@@ -20,27 +20,11 @@ ament_target_dependencies(track_runner_node
   std_msgs
 )
 
-add_executable(angular_rate_tuner_node src/angular_rate_tuner_node.cpp)
-target_compile_features(angular_rate_tuner_node PRIVATE cxx_std_17)
-ament_target_dependencies(angular_rate_tuner_node
-  geometry_msgs
-  nav_msgs
-  rclcpp
-  std_msgs
-)
 
-add_executable(circle_angle_tuner_node src/circle_angle_tuner_node.cpp)
-target_compile_features(circle_angle_tuner_node PRIVATE cxx_std_17)
-ament_target_dependencies(circle_angle_tuner_node
-  geometry_msgs
-  nav_msgs
-  rclcpp
-  std_msgs
-)
+
+
 
 install(TARGETS
-  angular_rate_tuner_node
-  circle_angle_tuner_node
   track_runner_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )

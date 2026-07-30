@@ -18,6 +18,7 @@ def generate_launch_description():
     load_state_filename = LaunchConfiguration('load_state_filename')
     obstacle_file = LaunchConfiguration('obstacle_file')
     pose_topic = LaunchConfiguration('pose_topic')
+    target_pose_topic = LaunchConfiguration('target_pose_topic')
     carto_odom_topic = LaunchConfiguration('carto_odom_topic')
     pose_publish_rate_hz = LaunchConfiguration('pose_publish_rate_hz')
     pose_yaw_offset_rad = LaunchConfiguration('pose_yaw_offset_rad')
@@ -51,6 +52,13 @@ def generate_launch_description():
     imu_roll = LaunchConfiguration('imu_roll')
     imu_pitch = LaunchConfiguration('imu_pitch')
     imu_yaw = LaunchConfiguration('imu_yaw')
+    target_frame = LaunchConfiguration('target_frame')
+    target_x = LaunchConfiguration('target_x')
+    target_y = LaunchConfiguration('target_y')
+    target_z = LaunchConfiguration('target_z')
+    target_roll = LaunchConfiguration('target_roll')
+    target_pitch = LaunchConfiguration('target_pitch')
+    target_yaw = LaunchConfiguration('target_yaw')
 
     stm_node = Node(
         package='stm_bridge',
@@ -141,6 +149,23 @@ def generate_launch_description():
         ],
     )
 
+    base_to_target_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='car_base_link_to_target_tf',
+        output='screen',
+        arguments=[
+            '--x', target_x,
+            '--y', target_y,
+            '--z', target_z,
+            '--roll', target_roll,
+            '--pitch', target_pitch,
+            '--yaw', target_yaw,
+            '--frame-id', base_frame,
+            '--child-frame-id', target_frame,
+        ],
+    )
+
     carto_pose_publisher_node = Node(
         package='car_localization',
         executable='carto_pose_publisher_node',
@@ -152,6 +177,9 @@ def generate_launch_description():
             'base_frame_id': base_frame,
             'output_frame_id': 'car_map',
             'pose_topic': pose_topic,
+            'target_frame_id': target_frame,
+            'target_pose_topic': target_pose_topic,
+            'publish_target_pose': True,
             'odom_topic': carto_odom_topic,
             'odom_child_frame_id': base_frame,
             'publish_rate_hz': pose_publish_rate_hz,
@@ -200,6 +228,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('obstacle_file', default_value=''),
         DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
+        DeclareLaunchArgument('target_pose_topic', default_value='/car/target_pose'),
         DeclareLaunchArgument('carto_odom_topic', default_value='/car/odom/carto'),
         DeclareLaunchArgument('pose_publish_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('pose_yaw_offset_rad', default_value='0.0'),
@@ -231,10 +260,18 @@ def generate_launch_description():
         DeclareLaunchArgument('imu_roll', default_value='0.0'),
         DeclareLaunchArgument('imu_pitch', default_value='0.0'),
         DeclareLaunchArgument('imu_yaw', default_value='0.0'),
+        DeclareLaunchArgument('target_frame', default_value='target'),
+        DeclareLaunchArgument('target_x', default_value='0.09553'),
+        DeclareLaunchArgument('target_y', default_value='0.0'),
+        DeclareLaunchArgument('target_z', default_value='0.0'),
+        DeclareLaunchArgument('target_roll', default_value='0.0'),
+        DeclareLaunchArgument('target_pitch', default_value='0.0'),
+        DeclareLaunchArgument('target_yaw', default_value='0.0'),
         stm_node,
         lidar_launch,
         base_to_laser_tf,
         base_to_imu_tf,
+        base_to_target_tf,
         carto_localization_launch,
         carto_pose_publisher_node,
         path_planner_node,
