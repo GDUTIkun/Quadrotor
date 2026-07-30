@@ -30,12 +30,12 @@ public:
     declare_parameter<double>("takeoff_tolerance", 0.10);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
-    declare_parameter<double>("follow_tolerance", 0.15);
+    declare_parameter<double>("follow_tolerance", 0.1);
     declare_parameter<double>("follow_stable_time", 2.0);
     declare_parameter<double>("drop_height", 0.5);
     declare_parameter<double>("mission_z_speed", 0.05);
     declare_parameter<double>("release_wait_time", 1.0);
-    declare_parameter<double>("return_tolerance", 0.15);
+    declare_parameter<double>("return_tolerance", 0.1);
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
     declare_parameter<double>("release_angle", 0.0);
     declare_parameter<std::string>("land_mode", "AUTO.LAND");
