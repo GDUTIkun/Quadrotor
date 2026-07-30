@@ -22,16 +22,16 @@ public:
   {
     declare_parameter<std::string>("vehicle_topic", "/car/target_pose");
     declare_parameter<std::string>("track_command_topic", "/car/track_runner/command");
-    declare_parameter<std::string>("track_start_command", "stop");
+    declare_parameter<std::string>("track_start_command", "start");
     declare_parameter<double>("flight_height", 1.5);
-    declare_parameter<double>("offset_x", 0.375);
+    declare_parameter<double>("offset_x", 0.305);
     declare_parameter<double>("offset_y", 0.875);
     declare_parameter<double>("follow_tolerance", 0.10);
     declare_parameter<double>("fast_descent_height", 0.6);
     declare_parameter<double>("fast_descent_speed", 0.40);
     declare_parameter<double>("descent_speed", 0.08);
-    declare_parameter<double>("land_switch_height", 0.18);
-    declare_parameter<double>("arrival_tolerance", 0.10);
+    declare_parameter<double>("land_switch_height", 0.38);
+    declare_parameter<double>("arrival_tolerance", 0.08);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
     declare_parameter<bool>("auto_set_mode", true);
