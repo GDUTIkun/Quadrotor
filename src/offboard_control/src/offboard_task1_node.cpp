@@ -31,7 +31,7 @@ public:
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
     declare_parameter<double>("follow_tolerance", 0.08);
-    declare_parameter<double>("follow_stable_time", 2.0);
+    declare_parameter<double>("follow_stable_time", 1.0);
     declare_parameter<double>("drop_trigger_x", 1.5);
     declare_parameter<double>("drop_trigger_y", 1.5);
     declare_parameter<double>("drop_trigger_tolerance", 0.3);
@@ -43,9 +43,9 @@ public:
     declare_parameter<double>("land_request_height", 0.5);
     declare_parameter<double>("setpoint_lowpass_min_tau", 0.0);
     declare_parameter<double>("setpoint_lowpass_near_error", 0.3);
-    declare_parameter<double>("setpoint_lowpass_near_tau", 0.6);
+    declare_parameter<double>("setpoint_lowpass_near_tau", 0.5);
     declare_parameter<double>("setpoint_lowpass_far_error", 2.0);
-    declare_parameter<double>("setpoint_lowpass_far_tau", 1.8);
+    declare_parameter<double>("setpoint_lowpass_far_tau", 2.3);
     declare_parameter<double>("setpoint_snap_tolerance", 0.05);
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
     declare_parameter<double>("release_angle", 0.0);
@@ -272,13 +272,11 @@ private:
   void check_follow_complete()
   {
     if (vehicle_follow_locked_ || !vehicle_pose_fresh()) {
-      follow_stable_ = false;
       return;
     }
 
     if (!drop_trigger_reached_) {
       if (!drop_trigger_satisfied()) {
-        follow_stable_ = false;
         return;
       }
 
@@ -289,29 +287,11 @@ private:
         vehicle_x_, vehicle_y_, drop_trigger_x(), drop_trigger_y(), drop_trigger_tolerance());
     }
 
-    const double error = std::hypot(
-      pose_.pose.position.x - hold_x_, pose_.pose.position.y - hold_y_);
-    if (error > follow_tolerance()) {
-      follow_stable_ = false;
-      return;
-    }
-
-    if (!follow_stable_) {
-      follow_stable_ = true;
-      follow_stable_since_ = now();
-      RCLCPP_INFO(
-        get_logger(), "Follow target reached (error %.3f m); checking stability", error);
-      return;
-    }
-
-    if ((now() - follow_stable_since_).seconds() >= follow_stable_time()) {
-      follow_stable_ = false;
-      reset_slow_z_control();
-      phase_ = Phase::DESCEND_FOR_DROP;
-      RCLCPP_INFO(
-        get_logger(), "Vehicle follow stable for %.1f s; descending to %.2f m",
-        follow_stable_time(), drop_height());
-    }
+    drop_xy_stable_ = false;
+    reset_slow_z_control();
+    phase_ = Phase::DESCEND_FOR_DROP;
+    RCLCPP_INFO(
+      get_logger(), "Drop trigger accepted; descending to %.2f m", drop_height());
   }
 
   void reset_slow_z_control()
@@ -747,7 +727,6 @@ private:
   bool vehicle_pose_received_{false};
   bool vehicle_follow_locked_{false};
   bool track_start_sent_{false};
-  bool follow_stable_{false};
   bool drop_trigger_reached_{false};
   bool drop_xy_stable_{false};
   bool land_stable_{false};
@@ -771,7 +750,6 @@ private:
   double active_lowpass_tau_{0.0};
   rclcpp::Time last_request_time_;
   rclcpp::Time last_vehicle_time_;
-  rclcpp::Time follow_stable_since_;
   rclcpp::Time drop_xy_stable_since_;
   rclcpp::Time land_stable_since_;
   rclcpp::Time release_started_time_;
