@@ -32,6 +32,10 @@ public:
     declare_parameter<double>("descent_speed", 0.08);
     declare_parameter<double>("land_switch_height", 0.38);
     declare_parameter<double>("arrival_tolerance", 0.08);
+    declare_parameter<double>("idle_after_land_seconds", 5.0);
+    declare_parameter<double>("follow_stable_time", 1.0);
+    declare_parameter<double>("return_tolerance", 0.08);
+    declare_parameter<double>("land_request_height", 0.5);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
     declare_parameter<bool>("auto_set_mode", true);
@@ -116,7 +120,10 @@ public:
 private:
   enum class Phase {
     WAIT_FOR_POSE, STREAM_SETPOINTS, ARM_AND_OFFBOARD, TAKEOFF,
-    FOLLOW_APPROACH, FOLLOW_FAST_DESCEND, FOLLOW_SLOW_DESCEND, LAND, FINISHED
+    FOLLOW_APPROACH, FOLLOW_FAST_DESCEND, FOLLOW_SLOW_DESCEND, VEHICLE_LAND,
+    IDLE_AFTER_VEHICLE_LAND, STREAM_VEHICLE_SETPOINTS, REARM_AND_OFFBOARD,
+    VEHICLE_TAKEOFF, SECOND_FOLLOW, RETURN_HOME, DESCEND_FOR_LAND, HOME_LAND,
+    FINISHED
   };
 
   void timer_callback()
@@ -184,17 +191,208 @@ private:
         run_follow_slow_descent(target_z);
         break;
 
-      case Phase::LAND:
-        request_land();
-        if (!state_.armed) {
-          phase_ = Phase::FINISHED;
-          RCLCPP_INFO(get_logger(), "Follow-and-land mission finished");
+      case Phase::VEHICLE_LAND:
+        handle_vehicle_landing(land_switch_height());
+        break;
+
+      case Phase::IDLE_AFTER_VEHICLE_LAND:
+        publish_vehicle_target(target_z);
+        if ((now() - idle_start_time_).seconds() >= idle_after_land_seconds()) {
+          stream_count_ = 0;
+          last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+          phase_ = Phase::STREAM_VEHICLE_SETPOINTS;
+          RCLCPP_INFO(get_logger(), "Idle complete; streaming vehicle takeoff setpoints");
         }
+        break;
+
+      case Phase::STREAM_VEHICLE_SETPOINTS:
+        publish_vehicle_target(target_z);
+        if (vehicle_target_available()) {
+          if (++stream_count_ >= 100) {
+            phase_ = Phase::REARM_AND_OFFBOARD;
+            last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+            RCLCPP_INFO(get_logger(), "Vehicle takeoff setpoints streamed; requesting OFFBOARD and arm");
+          }
+        } else {
+          stream_count_ = 0;
+        }
+        break;
+
+      case Phase::REARM_AND_OFFBOARD:
+        publish_vehicle_target(target_z);
+        ensure_offboard_and_armed();
+        if (state_.mode == "OFFBOARD" && state_.armed) {
+          follow_stable_ = false;
+          phase_ = Phase::VEHICLE_TAKEOFF;
+          RCLCPP_INFO(get_logger(), "Taking off from vehicle target to %.2f m", target_z);
+        }
+        break;
+
+      case Phase::VEHICLE_TAKEOFF:
+        publish_vehicle_target(target_z);
+        if (height_reached(target_z)) {
+          follow_stable_ = false;
+          phase_ = Phase::SECOND_FOLLOW;
+          RCLCPP_INFO(get_logger(), "Vehicle takeoff complete; checking follow stability");
+        }
+        break;
+
+      case Phase::SECOND_FOLLOW:
+        publish_vehicle_target(target_z);
+        if (vehicle_target_stable()) {
+          phase_ = Phase::RETURN_HOME;
+          RCLCPP_INFO(
+            get_logger(), "Vehicle target stable for %.1f s; returning to takeoff point",
+            follow_stable_time());
+        }
+        break;
+
+      case Phase::RETURN_HOME:
+        publish_position(start_x_, start_y_, target_z);
+        if (home_reached(target_z)) {
+          land_stable_ = false;
+          phase_ = Phase::DESCEND_FOR_LAND;
+          RCLCPP_INFO(
+            get_logger(), "Takeoff point reached; descending to %.2f m before landing",
+            land_request_height());
+        }
+        break;
+
+      case Phase::DESCEND_FOR_LAND:
+        publish_position(start_x_, start_y_, land_request_height());
+        if (ready_to_request_land(land_request_height())) {
+          last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+          phase_ = Phase::HOME_LAND;
+          RCLCPP_INFO(
+            get_logger(),
+            "Landing request height reached and home stable for %.1f s; requesting landing",
+            follow_stable_time());
+        }
+        break;
+
+      case Phase::HOME_LAND:
+        handle_home_landing(land_request_height());
         break;
 
       case Phase::FINISHED:
         break;
     }
+  }
+
+  void handle_vehicle_landing(double target_z)
+  {
+    if (state_.mode != land_mode()) {
+      publish_position(hold_x_, hold_y_, target_z);
+      request_land_mode();
+      return;
+    }
+
+    if (!state_.armed) {
+      idle_start_time_ = now();
+      follow_stable_ = false;
+      land_stable_ = false;
+      phase_ = Phase::IDLE_AFTER_VEHICLE_LAND;
+      RCLCPP_INFO(
+        get_logger(), "Vehicle landing complete; idling for %.1f s",
+        idle_after_land_seconds());
+    }
+  }
+
+  void handle_home_landing(double target_z)
+  {
+    if (state_.mode != land_mode()) {
+      publish_position(start_x_, start_y_, target_z);
+      request_land_mode();
+      return;
+    }
+
+    if (!state_.armed) {
+      phase_ = Phase::FINISHED;
+      RCLCPP_INFO(get_logger(), "Follow-and-land mission finished");
+    }
+  }
+
+  void publish_vehicle_target(double target_z)
+  {
+    update_horizontal_follow_target();
+    publish_position(hold_x_, hold_y_, target_z);
+  }
+
+  bool vehicle_target_available() const
+  {
+    return !vehicle_follow_locked_ && vehicle_pose_fresh();
+  }
+
+  bool vehicle_target_stable()
+  {
+    if (!vehicle_target_available()) {
+      follow_stable_ = false;
+      return false;
+    }
+
+    const double error = horizontal_error(hold_x_, hold_y_);
+    if (error > follow_tolerance()) {
+      follow_stable_ = false;
+      return false;
+    }
+
+    if (!follow_stable_) {
+      follow_stable_ = true;
+      follow_stable_since_ = now();
+      RCLCPP_INFO(
+        get_logger(), "Vehicle target reached (error %.3f m); checking stability", error);
+      return false;
+    }
+
+    return (now() - follow_stable_since_).seconds() >= follow_stable_time();
+  }
+
+  bool height_reached(double target_z) const
+  {
+    return std::abs(pose_.pose.position.z - target_z) <= arrival_tolerance();
+  }
+
+  bool home_reached(double target_z) const
+  {
+    const double error = std::hypot(
+      pose_.pose.position.x - start_x_, pose_.pose.position.y - start_y_);
+    return error <= return_tolerance() && height_reached(target_z);
+  }
+
+  bool ready_to_request_land(double target_z)
+  {
+    const double error = std::hypot(
+      pose_.pose.position.x - start_x_, pose_.pose.position.y - start_y_);
+    if (error > return_tolerance() || !height_reached(target_z)) {
+      land_stable_ = false;
+      return false;
+    }
+
+    if (!land_stable_) {
+      land_stable_ = true;
+      land_stable_since_ = now();
+      RCLCPP_INFO(
+        get_logger(), "Landing pre-check reached (xy error %.3f m); checking stability",
+        error);
+      return false;
+    }
+
+    return (now() - land_stable_since_).seconds() >= follow_stable_time();
+  }
+
+  void request_land_mode()
+  {
+    if ((now() - last_request_time_).seconds() < 2.0 ||
+      !set_mode_client_->service_is_ready())
+    {
+      return;
+    }
+
+    auto request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
+    request->custom_mode = land_mode();
+    set_mode_client_->async_send_request(request);
+    last_request_time_ = now();
+    RCLCPP_INFO(get_logger(), "Landing mode requested: %s", land_mode().c_str());
   }
 
   void run_follow_fast_descent(double takeoff_z)
@@ -224,7 +422,8 @@ private:
     if (target_z <= switch_z + 1e-6 &&
       pose_.pose.position.z <= switch_z + arrival_tolerance())
     {
-      phase_ = Phase::LAND;
+      phase_ = Phase::VEHICLE_LAND;
+      last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
       RCLCPP_INFO(get_logger(), "Low altitude reached; requesting land mode");
     }
   }
@@ -294,35 +493,58 @@ private:
   void ensure_offboard_and_armed()
   {
     if (state_.mode != "OFFBOARD") {
+      offboard_confirmed_ = false;
+    }
+    if (!state_.armed) {
+      arm_confirmed_ = false;
+    }
+
+    if (state_.mode != "OFFBOARD") {
       if ((now() - last_request_time_).seconds() < 2.0) {
         return;
       }
       if (get_parameter("auto_set_mode").as_bool() && set_mode_client_->service_is_ready()) {
         auto request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
         request->custom_mode = "OFFBOARD";
-        set_mode_client_->async_send_request(request);
+        set_mode_client_->async_send_request(
+          request,
+          [this](rclcpp::Client<mavros_msgs::srv::SetMode>::SharedFuture future) {
+            RCLCPP_INFO(
+              get_logger(), "OFFBOARD mode response: mode_sent=%s",
+              future.get()->mode_sent ? "true" : "false");
+          });
+        RCLCPP_INFO(get_logger(), "OFFBOARD mode requested");
       }
       last_request_time_ = now();
       return;
+    }
+
+    if (!offboard_confirmed_) {
+      offboard_confirmed_ = true;
+      RCLCPP_INFO(get_logger(), "OFFBOARD mode confirmed");
     }
 
     if (!state_.armed && (now() - last_request_time_).seconds() >= 1.0) {
       if (get_parameter("auto_arm").as_bool() && arm_client_->service_is_ready()) {
         auto request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
         request->value = true;
-        arm_client_->async_send_request(request);
+        arm_client_->async_send_request(
+          request,
+          [this](rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedFuture future) {
+            const auto response = future.get();
+            RCLCPP_INFO(
+              get_logger(), "Arm response: success=%s, result=%u",
+              response->success ? "true" : "false", response->result);
+          });
+        RCLCPP_INFO(get_logger(), "Arm requested");
       }
       last_request_time_ = now();
     }
-  }
 
-  void request_land()
-  {
-    if (land_requested_ || !set_mode_client_->service_is_ready()) return;
-    auto request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
-    request->custom_mode = get_parameter("land_mode").as_string();
-    set_mode_client_->async_send_request(request);
-    land_requested_ = true;
+    if (state_.armed && !arm_confirmed_) {
+      arm_confirmed_ = true;
+      RCLCPP_INFO(get_logger(), "Arm confirmed");
+    }
   }
 
   double flight_height() const
@@ -348,6 +570,22 @@ private:
   { return get_parameter("land_switch_height").as_double(); }
   double arrival_tolerance() const
   { return std::max(0.02, get_parameter("arrival_tolerance").as_double()); }
+  double idle_after_land_seconds() const
+  { return std::max(0.0, get_parameter("idle_after_land_seconds").as_double()); }
+  double follow_stable_time() const
+  { return std::max(0.1, get_parameter("follow_stable_time").as_double()); }
+  double return_tolerance() const
+  { return std::max(0.02, get_parameter("return_tolerance").as_double()); }
+  double land_request_height() const
+  {
+    return std::clamp(
+      get_parameter("land_request_height").as_double(), 0.2, flight_height());
+  }
+  std::string land_mode() const
+  {
+    const auto mode = get_parameter("land_mode").as_string();
+    return mode.empty() ? "AUTO.LAND" : mode;
+  }
 
   double vehicle_timeout() const
   {
@@ -375,7 +613,10 @@ private:
   bool vehicle_pose_received_{false};
   bool vehicle_follow_locked_{false};
   bool track_start_sent_{false};
-  bool land_requested_{false};
+  bool follow_stable_{false};
+  bool land_stable_{false};
+  bool offboard_confirmed_{false};
+  bool arm_confirmed_{false};
   int stream_count_{0};
   double start_x_{0.0};
   double start_y_{0.0};
@@ -387,6 +628,9 @@ private:
   rclcpp::Time last_request_time_;
   rclcpp::Time last_vehicle_time_;
   rclcpp::Time descent_start_time_;
+  rclcpp::Time idle_start_time_;
+  rclcpp::Time follow_stable_since_;
+  rclcpp::Time land_stable_since_;
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr vehicle_pose_sub_;
