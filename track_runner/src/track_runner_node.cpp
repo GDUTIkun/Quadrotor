@@ -91,7 +91,7 @@ public:
     straight_length_m_ = declare_parameter<double>("straight_length_m", 1.5);
     radius_m_ = declare_parameter<double>("radius_m", 0.75);
     path_spacing_m_ = declare_parameter<double>("path_spacing_m", 0.03);
-    speed_m_s_ = declare_parameter<double>("default_speed_m_s", 0.03);
+    speed_m_s_ = declare_parameter<double>("default_speed_m_s", 0.01);
     target_laps_ = declare_parameter<int>("default_laps", 1);
     lookahead_distance_m_ = declare_parameter<double>("lookahead_distance_m", 0.25);
     waypoint_tolerance_m_ = declare_parameter<double>("waypoint_tolerance_m", 0.08);

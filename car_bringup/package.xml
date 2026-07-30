@@ -16,6 +16,7 @@
   <exec_depend>path_planner</exec_depend>
   <exec_depend>stm_bridge</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>track_runner</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -399,7 +399,7 @@ ROS 接口：
 | `straight_length_m` | `1.5` | 直线段长度 |
 | `radius_m` | `0.75` | 半圆半径 |
 | `path_spacing_m` | `0.02` | 航线路径点间距 |
-| `default_speed_m_s` | `0.03` | 默认线速度 |
+| `default_speed_m_s` | `0.01` | 默认线速度 |
 | `default_laps` | `1` | 默认圈数 |
 | `lookahead_distance_m` | `0.25` | 前瞻目标点距离 |
 | `waypoint_tolerance_m` | `0.05` | 路径进度更新容差 |
@@ -435,12 +435,16 @@ ros2 launch track_runner track_runner.launch.py
 终端控制：
 
 ```bash
-ros2 topic pub --once /car/track_runner/speed std_msgs/msg/Float64 "{data: 0.02}"
-ros2 topic pub --once /car/track_runner/laps std_msgs/msg/Int32 "{data: 1}"
 ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: start}"
 ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: pause}"
 ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: resume}"
 ros2 topic pub --once /car/track_runner/command std_msgs/msg/String "{data: stop}"
+```
+
+运行中调速：
+
+```bash
+ros2 topic pub --once /car/track_runner/speed std_msgs/msg/Float64 "{data: 0.02}"
 ```
 
 使用注意：
