@@ -33,7 +33,7 @@ public:
     declare_parameter<double>("max_vehicle_jump", 0.5);
     declare_parameter<double>("follow_tolerance", 0.08);
     declare_parameter<double>("follow_stable_time", 1.5);
-    declare_parameter<double>("drop_height", 0.6);
+    declare_parameter<double>("drop_height", 0.7);
     declare_parameter<double>("mission_z_speed", 0.05);
     declare_parameter<double>("drop_xy_stable_time", 1.5);
     declare_parameter<double>("release_wait_time", 1.0);
