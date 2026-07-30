@@ -31,12 +31,12 @@ public:
     declare_parameter<double>("takeoff_tolerance", 0.10);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
-    declare_parameter<double>("follow_tolerance", 0.08);
-    declare_parameter<double>("follow_stable_time", 1.5);
+    declare_parameter<double>("follow_tolerance", 0.1);
+    declare_parameter<double>("follow_stable_time", 1.0);
     declare_parameter<double>("drop_height", 0.7);
     declare_parameter<double>("mission_z_speed", 0.05);
     declare_parameter<double>("drop_xy_stable_time", 1.5);
-    declare_parameter<double>("release_wait_time", 1.0);
+    declare_parameter<double>("release_wait_time", 0.5);
     declare_parameter<double>("return_tolerance", 0.08);
     declare_parameter<double>("land_request_height", 0.5);
     declare_parameter<double>("setpoint_lowpass_enable_distance", 0.8);
@@ -321,14 +321,36 @@ private:
   void check_follow_complete()
   {
     if (vehicle_follow_locked_ || !vehicle_pose_fresh()) {
+      follow_stable_ = false;
       return;
     }
 
+    const double error = std::hypot(
+      pose_.pose.position.x - hold_x_, pose_.pose.position.y - hold_y_);
+    if (error > follow_tolerance()) {
+      follow_stable_ = false;
+      return;
+    }
+
+    if (!follow_stable_) {
+      follow_stable_ = true;
+      follow_stable_since_ = now();
+      RCLCPP_INFO(
+        get_logger(), "Follow target reached (error %.3f m); checking stability", error);
+      return;
+    }
+
+    if ((now() - follow_stable_since_).seconds() < follow_stable_time()) {
+      return;
+    }
+
+    follow_stable_ = false;
     drop_xy_stable_ = false;
     reset_slow_z_control();
     phase_ = Phase::DESCEND_FOR_DROP;
     RCLCPP_INFO(
-      get_logger(), "Starting drop descent to %.2f m", drop_height());
+      get_logger(), "Vehicle follow stable for %.1f s; descending to %.2f m",
+      follow_stable_time(), drop_height());
   }
 
   void reset_slow_z_control()
@@ -714,6 +736,7 @@ private:
   bool reference_captured_{false};
   bool vehicle_pose_received_{false};
   bool vehicle_follow_locked_{false};
+  bool follow_stable_{false};
   bool drop_xy_stable_{false};
   bool land_stable_{false};
   bool payload_released_{false};
@@ -734,6 +757,7 @@ private:
   rclcpp::Time last_request_time_;
   rclcpp::Time last_track_command_time_;
   rclcpp::Time last_vehicle_time_;
+  rclcpp::Time follow_stable_since_;
   rclcpp::Time drop_xy_stable_since_;
   rclcpp::Time land_stable_since_;
   rclcpp::Time release_started_time_;
