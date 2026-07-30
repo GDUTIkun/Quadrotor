@@ -27,6 +27,8 @@ public:
     declare_parameter<double>("offset_x", 0.375);
     declare_parameter<double>("offset_y", 0.875);
     declare_parameter<double>("follow_tolerance", 0.10);
+    declare_parameter<double>("fast_descent_height", 0.6);
+    declare_parameter<double>("fast_descent_speed", 0.40);
     declare_parameter<double>("descent_speed", 0.08);
     declare_parameter<double>("land_switch_height", 0.18);
     declare_parameter<double>("arrival_tolerance", 0.10);
@@ -114,7 +116,7 @@ public:
 private:
   enum class Phase {
     WAIT_FOR_POSE, STREAM_SETPOINTS, ARM_AND_OFFBOARD, TAKEOFF,
-    FOLLOW_APPROACH, FOLLOW_DESCEND, LAND, FINISHED
+    FOLLOW_APPROACH, FOLLOW_FAST_DESCEND, FOLLOW_SLOW_DESCEND, LAND, FINISHED
   };
 
   void timer_callback()
@@ -168,14 +170,18 @@ private:
           horizontal_error(hold_x_, hold_y_) <= follow_tolerance())
         {
           descent_start_time_ = now();
-          phase_ = Phase::FOLLOW_DESCEND;
+          phase_ = Phase::FOLLOW_FAST_DESCEND;
           RCLCPP_INFO(get_logger(),
-            "Vehicle target reached; starting follow while descending");
+            "Vehicle target reached; starting fast follow descent");
         }
         break;
 
-      case Phase::FOLLOW_DESCEND:
-        run_follow_descent(target_z);
+      case Phase::FOLLOW_FAST_DESCEND:
+        run_follow_fast_descent(target_z);
+        break;
+
+      case Phase::FOLLOW_SLOW_DESCEND:
+        run_follow_slow_descent(target_z);
         break;
 
       case Phase::LAND:
@@ -191,12 +197,29 @@ private:
     }
   }
 
-  void run_follow_descent(double takeoff_z)
+  void run_follow_fast_descent(double takeoff_z)
   {
     update_horizontal_follow_target();
     const double elapsed = std::max(0.0, (now() - descent_start_time_).seconds());
-    const double switch_z = std::clamp(land_switch_height(), 0.08, takeoff_z);
-    const double target_z = std::max(switch_z, takeoff_z - descent_speed() * elapsed);
+    const double fast_z = fast_descent_height(takeoff_z);
+    const double target_z = std::max(fast_z, takeoff_z - fast_descent_speed() * elapsed);
+    publish_position(hold_x_, hold_y_, target_z);
+    if (target_z <= fast_z + 1e-6 &&
+      pose_.pose.position.z <= fast_z + arrival_tolerance())
+    {
+      descent_start_time_ = now();
+      phase_ = Phase::FOLLOW_SLOW_DESCEND;
+      RCLCPP_INFO(get_logger(), "Fast descent complete; slowing descent to land switch height");
+    }
+  }
+
+  void run_follow_slow_descent(double takeoff_z)
+  {
+    update_horizontal_follow_target();
+    const double elapsed = std::max(0.0, (now() - descent_start_time_).seconds());
+    const double start_z = fast_descent_height(takeoff_z);
+    const double switch_z = std::clamp(land_switch_height(), 0.08, start_z);
+    const double target_z = std::max(switch_z, start_z - descent_speed() * elapsed);
     publish_position(hold_x_, hold_y_, target_z);
     if (target_z <= switch_z + 1e-6 &&
       pose_.pose.position.z <= switch_z + arrival_tolerance())
@@ -312,6 +335,13 @@ private:
 
   double follow_tolerance() const
   { return std::max(0.02, get_parameter("follow_tolerance").as_double()); }
+  double fast_descent_height(double takeoff_z) const
+  {
+    const double switch_z = std::clamp(land_switch_height(), 0.08, takeoff_z);
+    return std::clamp(get_parameter("fast_descent_height").as_double(), switch_z, takeoff_z);
+  }
+  double fast_descent_speed() const
+  { return std::max(0.02, get_parameter("fast_descent_speed").as_double()); }
   double descent_speed() const
   { return std::max(0.02, get_parameter("descent_speed").as_double()); }
   double land_switch_height() const
