@@ -32,9 +32,12 @@ public:
     declare_parameter<double>("max_vehicle_jump", 0.5);
     declare_parameter<double>("follow_tolerance", 0.08);
     declare_parameter<double>("follow_stable_time", 2.0);
-    declare_parameter<double>("drop_height", 0.8);
+    declare_parameter<double>("drop_trigger_x", 1.5);
+    declare_parameter<double>("drop_trigger_y", 1.5);
+    declare_parameter<double>("drop_trigger_tolerance", 0.3);
+    declare_parameter<double>("drop_height", 0.6);
     declare_parameter<double>("mission_z_speed", 0.05);
-    declare_parameter<double>("drop_xy_stable_time", 1.0);
+    declare_parameter<double>("drop_xy_stable_time", 1.5);
     declare_parameter<double>("release_wait_time", 1.0);
     declare_parameter<double>("return_tolerance", 0.08);
     declare_parameter<double>("land_request_height", 0.5);
@@ -42,7 +45,7 @@ public:
     declare_parameter<double>("setpoint_lowpass_near_error", 0.3);
     declare_parameter<double>("setpoint_lowpass_near_tau", 0.6);
     declare_parameter<double>("setpoint_lowpass_far_error", 2.0);
-    declare_parameter<double>("setpoint_lowpass_far_tau", 1.2);
+    declare_parameter<double>("setpoint_lowpass_far_tau", 1.8);
     declare_parameter<double>("setpoint_snap_tolerance", 0.05);
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
     declare_parameter<double>("release_angle", 0.0);
@@ -273,6 +276,19 @@ private:
       return;
     }
 
+    if (!drop_trigger_reached_) {
+      if (!drop_trigger_satisfied()) {
+        follow_stable_ = false;
+        return;
+      }
+
+      drop_trigger_reached_ = true;
+      RCLCPP_INFO(
+        get_logger(),
+        "Drop trigger reached: targetpose=(%.3f, %.3f), trigger=(%.3f, %.3f) +/- %.3f m",
+        vehicle_x_, vehicle_y_, drop_trigger_x(), drop_trigger_y(), drop_trigger_tolerance());
+    }
+
     const double error = std::hypot(
       pose_.pose.position.x - hold_x_, pose_.pose.position.y - hold_y_);
     if (error > follow_tolerance()) {
@@ -361,6 +377,13 @@ private:
     }
 
     return (now() - drop_xy_stable_since_).seconds() >= drop_xy_stable_time();
+  }
+
+  bool drop_trigger_satisfied() const
+  {
+    const double tolerance = drop_trigger_tolerance();
+    return std::abs(vehicle_x_ - drop_trigger_x()) <= tolerance &&
+      std::abs(vehicle_y_ - drop_trigger_y()) <= tolerance;
   }
 
   bool ready_to_request_land(double target_z)
@@ -656,6 +679,14 @@ private:
     return std::max(0.1, get_parameter("follow_stable_time").as_double());
   }
 
+  double drop_trigger_x() const { return get_parameter("drop_trigger_x").as_double(); }
+  double drop_trigger_y() const { return get_parameter("drop_trigger_y").as_double(); }
+
+  double drop_trigger_tolerance() const
+  {
+    return std::max(0.0, get_parameter("drop_trigger_tolerance").as_double());
+  }
+
   double drop_height() const
   {
     return std::clamp(
@@ -717,6 +748,7 @@ private:
   bool vehicle_follow_locked_{false};
   bool track_start_sent_{false};
   bool follow_stable_{false};
+  bool drop_trigger_reached_{false};
   bool drop_xy_stable_{false};
   bool land_stable_{false};
   bool payload_released_{false};
