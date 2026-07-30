@@ -22,7 +22,7 @@ public:
   {
     declare_parameter<std::string>("vehicle_topic", "/car/target_pose");
     declare_parameter<std::string>("track_command_topic", "/car/track_runner/command");
-    declare_parameter<std::string>("track_start_command", "start");
+    declare_parameter<std::string>("track_start_command", "stop");
     declare_parameter<double>("flight_height", 1.5);
     declare_parameter<double>("offset_x", 0.375);
     declare_parameter<double>("offset_y", 0.875);
