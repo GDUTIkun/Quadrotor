@@ -27,10 +27,16 @@ add_executable(ground_station_path_node src/ground_station_path_node.cpp)
 add_executable(waypoint_offboard_node src/waypoint_offboard_node.cpp)
 add_executable(rpi5_servo_pwm_example src/rpi5_servo_pwm_example.cpp)
 add_executable(infrared_laser_node src/infrared_laser_node.cpp)
+add_executable(offboard_forward_land_node src/offboard_forward_land_node.cpp)
+add_executable(offboard_task1_node src/offboard_task1_node.cpp)
+add_executable(offboard_task2_node src/offboard_task2_node.cpp)
 target_compile_features(ground_station_path_node PUBLIC cxx_std_17)
 target_compile_features(waypoint_offboard_node PUBLIC cxx_std_17)
 target_compile_features(rpi5_servo_pwm_example PUBLIC cxx_std_17)
 target_compile_features(infrared_laser_node PUBLIC cxx_std_17)
+target_compile_features(offboard_forward_land_node PUBLIC cxx_std_17)
+target_compile_features(offboard_task1_node PUBLIC cxx_std_17)
+target_compile_features(offboard_task2_node PUBLIC cxx_std_17)
 
 set(OFFBOARD_CONTROL_TARGETS
   offboard_node_v2
@@ -40,6 +46,9 @@ set(OFFBOARD_CONTROL_TARGETS
   waypoint_offboard_node
   rpi5_servo_pwm_example
   infrared_laser_node
+  offboard_forward_land_node
+  offboard_task1_node
+  offboard_task2_node
 )
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/yolo_snapshot_request_node.cpp")
@@ -135,6 +144,26 @@ if(TARGET yolo_snapshot_service_node)
   )
 endif()
 
+ament_target_dependencies(offboard_forward_land_node
+  rclcpp
+  geometry_msgs
+  mavros_msgs
+)
+
+ament_target_dependencies(offboard_task1_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  mavros_msgs
+)
+
+ament_target_dependencies(offboard_task2_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  mavros_msgs
+)
+
 ament_target_dependencies(infrared_laser_node
   rclcpp
   std_msgs
@@ -157,6 +186,7 @@ set(OFFBOARD_CONTROL_SCRIPTS
   scripts/compare_input_shaping.py
   scripts/plot_pd_velocity.py
   scripts/plot_simple_setpoint_actual.py
+  scripts/servo_pwm_node.py
 )
 
 foreach(script ${OFFBOARD_CONTROL_SCRIPTS})

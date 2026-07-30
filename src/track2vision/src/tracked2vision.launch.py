@@ -3,6 +3,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Time
 from launch.launch_description_sources import PythonLaunchDescriptionSource, AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -32,6 +33,12 @@ def generate_launch_description():
             description="Serial device for the STP23 lidar.",
         ),
 
+        DeclareLaunchArgument(
+            "infrared_laser_initially_on",
+            default_value="true",
+            description="Whether to turn the infrared laser on when the node starts.",
+        ),
+
         # 底层数据源先启动；依赖数据和 TF 的节点会在自身逻辑里等待就绪。
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(lslidar_driver_launch_path),
@@ -54,6 +61,14 @@ def generate_launch_description():
         IncludeLaunchDescription(
             AnyLaunchDescriptionSource(mavros_launch_path),
             launch_arguments={}.items()
+        ),
+
+        Node(
+            package='offboard_control',
+            executable='servo_pwm_node.py',
+            name='servo_pwm_node',
+            output='screen',
+            parameters=[{'initial_angle': 180.0}],
         ),
 
         Node(

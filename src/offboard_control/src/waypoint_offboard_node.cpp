@@ -266,9 +266,20 @@ private:
                 return;
             }
 
-            RCLCPP_INFO(get_logger(),
-                        "Reached waypoint %zu/%zu. Press Enter once to fly to the next waypoint.",
-                        active_index_ + 1U, waypoint_count());
+            if (get_parameter("auto_advance_waypoints").as_bool()) {
+                advance_requested_ = true;
+                RCLCPP_INFO(get_logger(),
+                            "Reached waypoint %zu/%zu. Auto-advancing to the next waypoint.",
+                            active_index_ + 1U, waypoint_count());
+            } else if (get_parameter("enable_terminal_input").as_bool()) {
+                RCLCPP_INFO(get_logger(),
+                            "Reached waypoint %zu/%zu. Press Enter once to fly to the next waypoint.",
+                            active_index_ + 1U, waypoint_count());
+            } else {
+                RCLCPP_WARN(get_logger(),
+                            "Reached waypoint %zu/%zu. Holding position because auto advance and terminal input are disabled.",
+                            active_index_ + 1U, waypoint_count());
+            }
             return;
         }
 
