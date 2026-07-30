@@ -4,6 +4,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
@@ -23,6 +24,21 @@ public:
     CartographerLaserTransfer() : Node("cartographer_laser_transfer")
     {
         rangefinder_z_offset_m_ = declare_parameter<double>("rangefinder_z_offset_m", 0.115);
+        height_compensation_enabled_ = declare_parameter<bool>("height_compensation_enabled", true);
+        target_surface_height_m_ = declare_parameter<double>("target_surface_height_m", 0.19);
+        target_surface_height_min_m_ = declare_parameter<double>("target_surface_height_min_m", 0.11);
+        target_surface_height_max_m_ = declare_parameter<double>("target_surface_height_max_m", 0.30);
+        jump_enter_min_m_ = declare_parameter<double>("jump_enter_min_m", 0.10);
+        jump_enter_max_m_ = declare_parameter<double>("jump_enter_max_m", 0.32);
+        jump_release_min_m_ = declare_parameter<double>("jump_release_min_m", 0.10);
+        jump_release_max_m_ = declare_parameter<double>("jump_release_max_m", 0.32);
+        jump_confirm_frames_ = declare_parameter<int>("jump_confirm_frames", 3);
+        jump_confirm_time_s_ = declare_parameter<double>("jump_confirm_time_s", 0.20);
+        raw_z_filter_alpha_ = declare_parameter<double>("raw_z_filter_alpha", 0.35);
+        corrected_z_filter_alpha_ = declare_parameter<double>("corrected_z_filter_alpha", 0.45);
+        max_corrected_z_step_m_ = declare_parameter<double>("max_corrected_z_step_m", 0.04);
+        fake_vz_zero_time_s_ = declare_parameter<double>("fake_vz_zero_time_s", 0.25);
+        landing_release_lock_z_m_ = declare_parameter<double>("landing_release_lock_z_m", 0.65);
 
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -35,6 +51,20 @@ public:
             "/track2vision/ev_stable", 10);
         ev_stability_status_pub_ = this->create_publisher<std_msgs::msg::String>(
             "/track2vision/ev_stability_status", 10);
+        range_px4_pub_ = this->create_publisher<sensor_msgs::msg::Range>(
+            "/stp23/range_px4", rclcpp::SensorDataQoS());
+        raw_range_debug_pub_ = this->create_publisher<std_msgs::msg::Float64>(
+            "/track2vision/height/raw_range", 10);
+        raw_z_debug_pub_ = this->create_publisher<std_msgs::msg::Float64>(
+            "/track2vision/height/raw_z", 10);
+        corrected_z_debug_pub_ = this->create_publisher<std_msgs::msg::Float64>(
+            "/track2vision/height/corrected_z", 10);
+        surface_bias_debug_pub_ = this->create_publisher<std_msgs::msg::Float64>(
+            "/track2vision/height/surface_bias", 10);
+        height_state_debug_pub_ = this->create_publisher<std_msgs::msg::String>(
+            "/track2vision/height/state", 10);
+        target_detected_debug_pub_ = this->create_publisher<std_msgs::msg::Bool>(
+            "/track2vision/height/target_detected", 10);
 
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
             "/mavros/imu/data",
@@ -48,6 +78,13 @@ public:
             "/stp23/range",
             rclcpp::SensorDataQoS(),
             std::bind(&CartographerLaserTransfer::range_callback, this, std::placeholders::_1));
+        landing_on_target_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/track2vision/height/landing_on_target",
+            10,
+            [this](const std_msgs::msg::Bool::SharedPtr msg)
+            {
+                landing_on_target_ = msg->data;
+            });
 
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(40),
@@ -77,7 +114,26 @@ private:
         }
 
         const rclcpp::Time stamp(msg->header.stamp);
-        const double vehicle_z_enu = static_cast<double>(msg->range) + rangefinder_z_offset_m_;
+        const double raw_range_m = static_cast<double>(msg->range);
+        const double raw_z_enu = raw_range_m + rangefinder_z_offset_m_;
+
+        latest_raw_range_m_ = raw_range_m;
+        latest_raw_z_enu_ = raw_z_enu;
+
+        if (!range_received_)
+        {
+            raw_z_filtered_ = raw_z_enu;
+            corrected_z_filtered_ = raw_z_enu;
+            latest_range_z_enu_ = raw_z_enu;
+        }
+        else
+        {
+            const double raw_alpha = std::clamp(raw_z_filter_alpha_, 0.0, 1.0);
+            raw_z_filtered_ += raw_alpha * (raw_z_enu - raw_z_filtered_);
+        }
+
+        update_height_compensation(stamp, raw_z_enu);
+        const double corrected_z = filter_corrected_z(raw_z_enu + surface_bias_m_);
 
         if (range_received_)
         {
@@ -88,9 +144,18 @@ private:
                 constexpr double velocity_deadband_mps = 0.02;
                 constexpr double alpha = 0.35;
 
-                double measured_vz = (vehicle_z_enu - latest_range_z_enu_) / dt;
+                double measured_vz = (corrected_z - latest_range_z_enu_) / dt;
                 measured_vz = std::clamp(
                     measured_vz, -max_vertical_speed_mps, max_vertical_speed_mps);
+                if (fake_vz_zero_active_ && stamp < fake_vz_zero_until_)
+                {
+                    measured_vz = 0.0;
+                    filtered_vz_enu_ *= 0.50;
+                }
+                else
+                {
+                    fake_vz_zero_active_ = false;
+                }
                 if (std::abs(measured_vz) < velocity_deadband_mps)
                 {
                     measured_vz = 0.0;
@@ -100,8 +165,13 @@ private:
         }
 
         latest_range_time_ = stamp;
-        latest_range_z_enu_ = vehicle_z_enu;
+        latest_range_z_enu_ = corrected_z;
+        previous_raw_z_enu_ = raw_z_enu;
+        previous_raw_z_valid_ = true;
         range_received_ = true;
+
+        publish_compensated_range(*msg, corrected_z);
+        publish_height_debug();
     }
 
     void publish_vision_odometry()
@@ -477,13 +547,240 @@ private:
         return std::atan2(std::sin(angle), std::cos(angle));
     }
 
+    enum class HeightCompensationState
+    {
+        GROUND_NORMAL,
+        TARGET_CANDIDATE,
+        TARGET_OVERHEAD,
+        TARGET_RELEASE
+    };
+
+    bool within_window(const double value, const double min_abs, const double max_abs) const
+    {
+        return value >= min_abs && value <= max_abs;
+    }
+
+    bool release_locked() const
+    {
+        return landing_on_target_ ||
+               ((height_state_ == HeightCompensationState::TARGET_OVERHEAD ||
+                 height_state_ == HeightCompensationState::TARGET_RELEASE) &&
+                latest_range_z_enu_ <= landing_release_lock_z_m_);
+    }
+
+    void update_height_compensation(const rclcpp::Time &stamp, const double raw_z_enu)
+    {
+        if (!height_compensation_enabled_)
+        {
+            height_state_ = HeightCompensationState::GROUND_NORMAL;
+            surface_bias_m_ = 0.0;
+            return;
+        }
+
+        const double instant_dz = previous_raw_z_valid_ ? raw_z_enu - previous_raw_z_enu_ : 0.0;
+        const int confirm_frames = std::max(1, jump_confirm_frames_);
+
+        switch (height_state_)
+        {
+        case HeightCompensationState::GROUND_NORMAL:
+            if (within_window(-instant_dz, jump_enter_min_m_, jump_enter_max_m_))
+            {
+                candidate_start_time_ = stamp;
+                candidate_baseline_z_ = previous_raw_z_enu_;
+                candidate_drop_peak_m_ = std::clamp(-instant_dz, target_surface_height_min_m_, target_surface_height_max_m_);
+                surface_bias_m_ = candidate_drop_peak_m_;
+                enter_candidate_count_ = 1;
+                release_candidate_count_ = 0;
+                height_state_ = HeightCompensationState::TARGET_CANDIDATE;
+                zero_fake_vertical_velocity(stamp);
+            }
+            break;
+
+        case HeightCompensationState::TARGET_CANDIDATE:
+        {
+            const double sustained_drop = candidate_baseline_z_ - raw_z_filtered_;
+            if (within_window(sustained_drop, jump_enter_min_m_, jump_enter_max_m_))
+            {
+                ++enter_candidate_count_;
+                candidate_drop_peak_m_ = std::max(candidate_drop_peak_m_, sustained_drop);
+                surface_bias_m_ = std::clamp(
+                    std::max(candidate_drop_peak_m_, target_surface_height_m_),
+                    target_surface_height_min_m_,
+                    target_surface_height_max_m_);
+            }
+            else if ((stamp - candidate_start_time_).seconds() > jump_confirm_time_s_)
+            {
+                enter_candidate_count_ = 0;
+                candidate_drop_peak_m_ = 0.0;
+                surface_bias_m_ = 0.0;
+                height_state_ = HeightCompensationState::GROUND_NORMAL;
+                break;
+            }
+
+            if (enter_candidate_count_ >= confirm_frames)
+            {
+                surface_bias_m_ = std::clamp(
+                    std::max(candidate_drop_peak_m_, target_surface_height_m_),
+                    target_surface_height_min_m_,
+                    target_surface_height_max_m_);
+                target_detected_ = true;
+                height_state_ = HeightCompensationState::TARGET_OVERHEAD;
+                zero_fake_vertical_velocity(stamp);
+                RCLCPP_INFO(
+                    this->get_logger(),
+                    "Target surface detected. Applying height bias %.3f m.",
+                    surface_bias_m_);
+            }
+            break;
+        }
+
+        case HeightCompensationState::TARGET_OVERHEAD:
+            if (!release_locked() && within_window(instant_dz, jump_release_min_m_, jump_release_max_m_))
+            {
+                release_start_time_ = stamp;
+                release_baseline_z_ = previous_raw_z_enu_;
+                release_restore_bias_m_ = surface_bias_m_;
+                surface_bias_m_ = 0.0;
+                release_candidate_count_ = 1;
+                height_state_ = HeightCompensationState::TARGET_RELEASE;
+                zero_fake_vertical_velocity(stamp);
+            }
+            break;
+
+        case HeightCompensationState::TARGET_RELEASE:
+        {
+            if (release_locked())
+            {
+                surface_bias_m_ = release_restore_bias_m_;
+                release_candidate_count_ = 0;
+                height_state_ = HeightCompensationState::TARGET_OVERHEAD;
+                break;
+            }
+
+            const double sustained_rise = raw_z_filtered_ - release_baseline_z_;
+            if (within_window(sustained_rise, jump_release_min_m_, jump_release_max_m_))
+            {
+                ++release_candidate_count_;
+            }
+            else if ((stamp - release_start_time_).seconds() > jump_confirm_time_s_)
+            {
+                surface_bias_m_ = release_restore_bias_m_;
+                release_candidate_count_ = 0;
+                height_state_ = HeightCompensationState::TARGET_OVERHEAD;
+                break;
+            }
+
+            if (release_candidate_count_ >= confirm_frames)
+            {
+                surface_bias_m_ = 0.0;
+                target_detected_ = false;
+                height_state_ = HeightCompensationState::GROUND_NORMAL;
+                zero_fake_vertical_velocity(stamp);
+                RCLCPP_INFO(this->get_logger(), "Target surface released. Height bias cleared.");
+            }
+            break;
+        }
+        }
+    }
+
+    double filter_corrected_z(const double target_z)
+    {
+        if (!range_received_)
+        {
+            corrected_z_filtered_ = target_z;
+            return corrected_z_filtered_;
+        }
+
+        const double alpha = std::clamp(corrected_z_filter_alpha_, 0.0, 1.0);
+        double step = alpha * (target_z - corrected_z_filtered_);
+        const double max_step = std::max(0.0, max_corrected_z_step_m_);
+        if (max_step > 0.0)
+        {
+            step = std::clamp(step, -max_step, max_step);
+        }
+        corrected_z_filtered_ += step;
+        return corrected_z_filtered_;
+    }
+
+    void zero_fake_vertical_velocity(const rclcpp::Time &stamp)
+    {
+        filtered_vz_enu_ = 0.0;
+        fake_vz_zero_until_ = stamp + rclcpp::Duration::from_seconds(std::max(0.0, fake_vz_zero_time_s_));
+        fake_vz_zero_active_ = true;
+    }
+
+    std::string height_state_name() const
+    {
+        if (landing_on_target_)
+        {
+            return "LAND_ON_TARGET";
+        }
+
+        switch (height_state_)
+        {
+        case HeightCompensationState::GROUND_NORMAL:
+            return "GROUND_NORMAL";
+        case HeightCompensationState::TARGET_CANDIDATE:
+            return "TARGET_CANDIDATE";
+        case HeightCompensationState::TARGET_OVERHEAD:
+            return "TARGET_OVERHEAD";
+        case HeightCompensationState::TARGET_RELEASE:
+            return "TARGET_RELEASE";
+        }
+        return "UNKNOWN";
+    }
+
+    void publish_compensated_range(const sensor_msgs::msg::Range &raw_msg, const double corrected_z)
+    {
+        sensor_msgs::msg::Range range_msg = raw_msg;
+        range_msg.header.frame_id = raw_msg.header.frame_id;
+        range_msg.range = static_cast<float>(std::clamp(
+            corrected_z - rangefinder_z_offset_m_,
+            static_cast<double>(raw_msg.min_range),
+            static_cast<double>(raw_msg.max_range)));
+        range_px4_pub_->publish(range_msg);
+    }
+
+    void publish_height_debug()
+    {
+        std_msgs::msg::Float64 value_msg;
+
+        value_msg.data = latest_raw_range_m_;
+        raw_range_debug_pub_->publish(value_msg);
+
+        value_msg.data = latest_raw_z_enu_;
+        raw_z_debug_pub_->publish(value_msg);
+
+        value_msg.data = latest_range_z_enu_;
+        corrected_z_debug_pub_->publish(value_msg);
+
+        value_msg.data = surface_bias_m_;
+        surface_bias_debug_pub_->publish(value_msg);
+
+        std_msgs::msg::String state_msg;
+        state_msg.data = height_state_name();
+        height_state_debug_pub_->publish(state_msg);
+
+        std_msgs::msg::Bool detected_msg;
+        detected_msg.data = target_detected_;
+        target_detected_debug_pub_->publish(detected_msg);
+    }
+
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr vision_pose_debug_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr vision_odom_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ev_stable_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ev_stability_status_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr range_px4_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr raw_range_debug_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr raw_z_debug_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr corrected_z_debug_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr surface_bias_debug_pub_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr height_state_debug_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr target_detected_debug_pub_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr local_pose_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr range_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr landing_on_target_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -496,8 +793,43 @@ private:
     bool range_received_ = false;
     rclcpp::Time latest_range_time_;
     double latest_range_z_enu_ = 0.0;
+    double latest_raw_range_m_ = 0.0;
+    double latest_raw_z_enu_ = 0.0;
+    double raw_z_filtered_ = 0.0;
+    double corrected_z_filtered_ = 0.0;
+    double previous_raw_z_enu_ = 0.0;
+    bool previous_raw_z_valid_ = false;
     double filtered_vz_enu_ = 0.0;
     double rangefinder_z_offset_m_ = 0.115;
+    bool height_compensation_enabled_ = true;
+    double target_surface_height_m_ = 0.19;
+    double target_surface_height_min_m_ = 0.11;
+    double target_surface_height_max_m_ = 0.30;
+    double jump_enter_min_m_ = 0.10;
+    double jump_enter_max_m_ = 0.32;
+    double jump_release_min_m_ = 0.10;
+    double jump_release_max_m_ = 0.32;
+    int jump_confirm_frames_ = 3;
+    double jump_confirm_time_s_ = 0.20;
+    double raw_z_filter_alpha_ = 0.35;
+    double corrected_z_filter_alpha_ = 0.45;
+    double max_corrected_z_step_m_ = 0.04;
+    double fake_vz_zero_time_s_ = 0.25;
+    double landing_release_lock_z_m_ = 0.65;
+    double surface_bias_m_ = 0.0;
+    bool landing_on_target_ = false;
+    bool target_detected_ = false;
+    HeightCompensationState height_state_ = HeightCompensationState::GROUND_NORMAL;
+    rclcpp::Time candidate_start_time_;
+    double candidate_baseline_z_ = 0.0;
+    double candidate_drop_peak_m_ = 0.0;
+    int enter_candidate_count_ = 0;
+    rclcpp::Time release_start_time_;
+    double release_baseline_z_ = 0.0;
+    double release_restore_bias_m_ = 0.0;
+    int release_candidate_count_ = 0;
+    rclcpp::Time fake_vz_zero_until_;
+    bool fake_vz_zero_active_ = false;
 
     struct PoseSample
     {

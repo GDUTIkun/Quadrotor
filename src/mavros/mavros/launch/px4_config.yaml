@@ -152,7 +152,7 @@
 /**/distance_sensor:
   ros__parameters:
     config: |
-      /stp23/range:
+      /stp23/range_px4:
         subscriber: true
         id: 4
         orientation: PITCH_270
