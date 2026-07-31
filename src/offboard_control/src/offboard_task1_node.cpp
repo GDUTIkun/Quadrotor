@@ -47,6 +47,7 @@ public:
     declare_parameter<double>("setpoint_lowpass_tau",1.6);
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
     declare_parameter<std::string>("status_topic", "/offboard_task1/status");
+    declare_parameter<std::string>("unified_status_topic", "/offboard/status");
     declare_parameter<std::string>("height_lock_topic", "/track2vision/height/landing_on_target");
     declare_parameter<double>("status_publish_period", 1.0);
     declare_parameter<double>("release_angle", 180.0);
@@ -122,6 +123,9 @@ public:
       get_parameter("height_lock_topic").as_string(), 10);
     status_pub_ = create_publisher<std_msgs::msg::String>(
       get_parameter("status_topic").as_string(),
+      rclcpp::QoS(1).reliable().transient_local());
+    unified_status_pub_ = create_publisher<std_msgs::msg::String>(
+      get_parameter("unified_status_topic").as_string(),
       rclcpp::QoS(1).reliable().transient_local());
     set_mode_client_ = create_client<mavros_msgs::srv::SetMode>("mavros/set_mode");
     arm_client_ = create_client<mavros_msgs::srv::CommandBool>("mavros/cmd/arming");
@@ -289,6 +293,11 @@ private:
     std_msgs::msg::String message;
     message.data = status;
     status_pub_->publish(message);
+
+    std_msgs::msg::String unified_message;
+    unified_message.data =
+      "{\"task\":\"task1\",\"status\":\"" + status + "\"}";
+    unified_status_pub_->publish(unified_message);
     last_status_ = status;
     last_status_publish_time_ = current_time;
   }
@@ -853,6 +862,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr servo_angle_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr height_lock_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr unified_status_pub_;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
   rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arm_client_;
   rclcpp::TimerBase::SharedPtr timer_;

@@ -4,7 +4,6 @@
 #include "mavros_msgs/srv/command_bool.hpp"
 #include "mavros_msgs/srv/set_mode.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
 
 #include <algorithm>
@@ -26,7 +25,7 @@ public:
     declare_parameter<std::string>("track_start_command", "start");
     declare_parameter<double>("track_command_publish_period", 0.2);
     declare_parameter<std::string>("status_topic", "/offboard_task2/status");
-    declare_parameter<std::string>("height_lock_topic", "/track2vision/height/landing_on_target");
+    declare_parameter<std::string>("unified_status_topic", "/offboard/status");
     declare_parameter<double>("status_publish_period", 1.0);
     declare_parameter<double>("flight_height", 1.5);
     declare_parameter<double>("offset_x", 0.345);
@@ -119,11 +118,11 @@ public:
       "mavros/setpoint_raw/local", 10);
     track_command_pub_ = create_publisher<std_msgs::msg::String>(
       get_parameter("track_command_topic").as_string(), 10);
-    height_lock_pub_ = create_publisher<std_msgs::msg::Bool>(
-      get_parameter("height_lock_topic").as_string(), 10);
     const auto status_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
     status_pub_ = create_publisher<std_msgs::msg::String>(
       get_parameter("status_topic").as_string(), status_qos);
+    unified_status_pub_ = create_publisher<std_msgs::msg::String>(
+      get_parameter("unified_status_topic").as_string(), status_qos);
     set_mode_client_ = create_client<mavros_msgs::srv::SetMode>("mavros/set_mode");
     arm_client_ = create_client<mavros_msgs::srv::CommandBool>("mavros/cmd/arming");
 
@@ -304,7 +303,6 @@ private:
         break;
     }
     publish_track_start_command_if_needed();
-    publish_height_lock();
     publish_status_if_needed();
   }
 
@@ -358,6 +356,11 @@ private:
     std_msgs::msg::String message;
     message.data = status;
     status_pub_->publish(message);
+
+    std_msgs::msg::String unified_message;
+    unified_message.data =
+      "{\"task\":\"task2\",\"status\":\"" + status + "\"}";
+    unified_status_pub_->publish(unified_message);
     last_published_status_ = status;
     last_status_publish_time_ = current_time;
     if (status_changed) {
@@ -795,32 +798,6 @@ private:
       "Vehicle track command publishing: %s", message.data.c_str());
   }
 
-  void publish_height_lock()
-  {
-    std_msgs::msg::Bool message;
-    message.data = target_operation_active();
-    height_lock_pub_->publish(message);
-  }
-
-  bool target_operation_active() const
-  {
-    switch (phase_) {
-      case Phase::FOLLOW_APPROACH:
-      case Phase::FOLLOW_FAST_DESCEND:
-      case Phase::FOLLOW_SLOW_DESCEND:
-      case Phase::VEHICLE_LAND:
-      case Phase::IDLE_AFTER_VEHICLE_LAND:
-      case Phase::STREAM_VEHICLE_SETPOINTS:
-      case Phase::REARM_AND_OFFBOARD:
-      case Phase::VEHICLE_TAKEOFF:
-      case Phase::SECOND_FOLLOW:
-        return true;
-
-      default:
-        return false;
-    }
-  }
-
   void ensure_offboard_and_armed()
   {
     if (state_.mode != "OFFBOARD") {
@@ -1024,8 +1001,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr vehicle_pose_sub_;
   rclcpp::Publisher<mavros_msgs::msg::PositionTarget>::SharedPtr setpoint_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr track_command_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr height_lock_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr unified_status_pub_;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
   rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arm_client_;
   rclcpp::TimerBase::SharedPtr timer_;
