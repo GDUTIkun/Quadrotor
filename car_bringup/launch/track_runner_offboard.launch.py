@@ -16,6 +16,7 @@ def generate_launch_description():
     start_stm = LaunchConfiguration('start_stm')
     start_carto = LaunchConfiguration('start_carto')
     start_pose_publisher = LaunchConfiguration('start_pose_publisher')
+    start_occupancy_grid = LaunchConfiguration('start_occupancy_grid')
 
     pose_topic = LaunchConfiguration('pose_topic')
     target_pose_topic = LaunchConfiguration('target_pose_topic')
@@ -103,6 +104,7 @@ def generate_launch_description():
             'start_stm': start_stm,
             'start_carto': start_carto,
             'start_pose_publisher': start_pose_publisher,
+            'start_occupancy_grid': start_occupancy_grid,
             'pose_topic': pose_topic,
             'target_pose_topic': target_pose_topic,
             'carto_odom_topic': carto_odom_topic,
@@ -195,6 +197,7 @@ def generate_launch_description():
         DeclareLaunchArgument('start_stm', default_value='true'),
         DeclareLaunchArgument('start_carto', default_value='true'),
         DeclareLaunchArgument('start_pose_publisher', default_value='true'),
+        DeclareLaunchArgument('start_occupancy_grid', default_value='false'),
         DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
         DeclareLaunchArgument('target_pose_topic', default_value='/car/target_pose'),
         DeclareLaunchArgument('carto_odom_topic', default_value='/car/odom/carto'),
@@ -229,13 +232,13 @@ def generate_launch_description():
         DeclareLaunchArgument('imu_pitch', default_value='0.0'),
         DeclareLaunchArgument('imu_yaw', default_value='0.0'),
         DeclareLaunchArgument('target_frame', default_value='target'),
-        DeclareLaunchArgument('target_x', default_value='0.09553'),
+        DeclareLaunchArgument('target_x', default_value='0.18003'),
         DeclareLaunchArgument('target_y', default_value='0.0'),
         DeclareLaunchArgument('target_z', default_value='0.0'),
         DeclareLaunchArgument('target_roll', default_value='0.0'),
         DeclareLaunchArgument('target_pitch', default_value='0.0'),
         DeclareLaunchArgument('target_yaw', default_value='0.0'),
-        DeclareLaunchArgument('straight_length_m', default_value='1.35'),
+        DeclareLaunchArgument('straight_length_m', default_value='1.42'),
         DeclareLaunchArgument('radius_m', default_value='0.75'),
         DeclareLaunchArgument('path_spacing_m', default_value='0.02'),
         DeclareLaunchArgument('default_speed_m_s', default_value='0.01'),
@@ -243,12 +246,12 @@ def generate_launch_description():
         DeclareLaunchArgument('lookahead_distance_m', default_value='0.20'),
         DeclareLaunchArgument('waypoint_tolerance_m', default_value='0.05'),
         DeclareLaunchArgument('goal_tolerance_m', default_value='0.05'),
-        DeclareLaunchArgument('k_w', default_value='0.6'),
-        DeclareLaunchArgument('k_w_ff_speed_intercept', default_value='5.5'),
-        DeclareLaunchArgument('k_w_ff_speed_slope', default_value='-45.0'),
+        DeclareLaunchArgument('k_w', default_value='0.54'),
+        DeclareLaunchArgument('k_w_ff_speed_intercept', default_value='5.8'),
+        DeclareLaunchArgument('k_w_ff_speed_slope', default_value='-28.0'),
         DeclareLaunchArgument('k_w_ff_min', default_value='0.0'),
         DeclareLaunchArgument('k_w_ff_max', default_value='10.0'),
-        DeclareLaunchArgument('k_w_rate', default_value='0.36'),
+        DeclareLaunchArgument('k_w_rate', default_value='0.30'),
         DeclareLaunchArgument('k_i_rate', default_value='0.22'),
         DeclareLaunchArgument('k_d_rate', default_value='0.0'),
         DeclareLaunchArgument('w_error_integral_max', default_value='0.5'),

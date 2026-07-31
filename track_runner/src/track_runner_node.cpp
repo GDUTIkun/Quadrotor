@@ -258,6 +258,10 @@ private:
   {
     const auto command = lower_copy(msg->data);
     if (command == "start") {
+      if (start_accepted_) {
+        RCLCPP_DEBUG(get_logger(), "Ignoring duplicate start command");
+        return;
+      }
       if (!pose_is_fresh()) {
         RCLCPP_WARN(get_logger(), "Cannot start track runner: /car/pose is not available");
         state_ = RunnerState::Idle;
@@ -266,6 +270,7 @@ private:
         publish_status();
         return;
       }
+      start_accepted_ = true;
       if (use_start_pose_as_origin_) {
         origin_x_ = pose_.x;
         origin_y_ = pose_.y;
@@ -625,6 +630,7 @@ private:
   double origin_y_{0.0};
 
   RunnerState state_{RunnerState::Idle};
+  bool start_accepted_{false};
   Pose2D pose_{};
   bool has_pose_{false};
   rclcpp::Time last_pose_time_{0, 0, RCL_ROS_TIME};

@@ -13,6 +13,7 @@ def generate_launch_description():
     start_stm = LaunchConfiguration('start_stm')
     start_carto = LaunchConfiguration('start_carto')
     start_pose_publisher = LaunchConfiguration('start_pose_publisher')
+    start_occupancy_grid = LaunchConfiguration('start_occupancy_grid')
 
     stm_port = LaunchConfiguration('stm_port')
     stm_baudrate = LaunchConfiguration('stm_baudrate')
@@ -104,6 +105,7 @@ def generate_launch_description():
         condition=IfCondition(start_carto),
         launch_arguments={
             'use_sim_time': use_sim_time,
+            'start_occupancy_grid': start_occupancy_grid,
             'car_namespace': car_namespace,
             'scan_topic': scan_topic,
             'imu_topic': imu_topic,
@@ -191,6 +193,7 @@ def generate_launch_description():
         DeclareLaunchArgument('start_stm', default_value='true'),
         DeclareLaunchArgument('start_carto', default_value='true'),
         DeclareLaunchArgument('start_pose_publisher', default_value='true'),
+        DeclareLaunchArgument('start_occupancy_grid', default_value='true'),
         DeclareLaunchArgument('pose_topic', default_value='/car/pose'),
         DeclareLaunchArgument('target_pose_topic', default_value='/car/target_pose'),
         DeclareLaunchArgument('carto_odom_topic', default_value='/car/odom/carto'),

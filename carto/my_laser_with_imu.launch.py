@@ -32,6 +32,7 @@ def generate_launch_description():
 
     ## ***** Launch arguments *****
     use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='false')
+    start_occupancy_grid_arg = DeclareLaunchArgument('start_occupancy_grid', default_value='true')
     car_namespace_arg = DeclareLaunchArgument('car_namespace', default_value='car')
     scan_topic_arg = DeclareLaunchArgument('scan_topic', default_value='/car/scan')
     imu_topic_arg = DeclareLaunchArgument('imu_topic', default_value='/car/imu/data_valid')
@@ -100,6 +101,7 @@ def generate_launch_description():
         executable='cartographer_occupancy_grid_node',
         namespace=LaunchConfiguration('car_namespace'),
         name='cartographer_occupancy_grid_node',
+        condition=IfCondition(LaunchConfiguration('start_occupancy_grid')),
         parameters=[
             {'use_sim_time': LaunchConfiguration('use_sim_time')},
             {'resolution': 0.05}  # 补全末尾逗号
@@ -148,6 +150,7 @@ def generate_launch_description():
     )
     return LaunchDescription([
         use_sim_time_arg,
+        start_occupancy_grid_arg,
         car_namespace_arg,
         scan_topic_arg,
         imu_topic_arg,
