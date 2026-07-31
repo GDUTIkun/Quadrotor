@@ -203,6 +203,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
   install(DIRECTORY
     launch/
     DESTINATION share/${PROJECT_NAME}/launch
+    PATTERN "__pycache__" EXCLUDE
   )
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include")
