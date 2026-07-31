@@ -37,3 +37,30 @@ Direct GPIO check:
 cat /sys/class/gpio/gpio46/value
 cat /sys/class/gpio/gpio47/value
 ```
+
+## Key Controlled Track Runner
+
+Start this launch when the two keys should control `track_runner_offboard.launch.py`:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/flight_ws/car
+colcon build --packages-select gpio_keys
+source install/setup.bash
+sudo ros2 run gpio_keys register_gpio_keys.sh
+ros2 launch gpio_keys key_track_runner_offboard.launch.py
+```
+
+Behavior:
+
+- `key1=true, key2=false`: wait 3 seconds, then start `car_bringup track_runner_offboard.launch.py`
+- `key1=false, key2=true`: wait 3 seconds, then start `car_bringup track_runner_offboard.launch.py`
+- `key1=true, key2=true`: publish `stop`, then kill the started launch
+- `key1=false, key2=false`: publish `stop`, then kill the started launch
+
+Optional launch arguments can be passed to the target launch through `target_args`:
+
+```bash
+ros2 launch gpio_keys key_track_runner_offboard.launch.py \
+  target_args:="start_lidar:=false start_stm:=false"
+```

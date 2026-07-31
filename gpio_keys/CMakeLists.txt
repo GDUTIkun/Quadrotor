@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 
 install(PROGRAMS
   scripts/gpio_keys_node.py
+  scripts/key_track_runner_supervisor.py
   scripts/register_gpio_keys.sh
   DESTINATION lib/${PROJECT_NAME}
 )
