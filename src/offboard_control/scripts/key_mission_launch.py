@@ -12,7 +12,7 @@ from std_msgs.msg import Bool
 class KeyMissionLauncher(Node):
     def __init__(self):
         super().__init__('key_mission_launcher')
-        self.declare_parameter('vision_start_delay', 2.0)
+        self.declare_parameter('vision_start_delay', 20.0)
         self.declare_parameter('offboard_start_delay', 10.0)
         self.vision_start_delay = float(self.get_parameter('vision_start_delay').value)
         self.offboard_start_delay = float(self.get_parameter('offboard_start_delay').value)
