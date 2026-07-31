@@ -32,6 +32,7 @@ public:
     declare_parameter<double>("descent_speed", 0.08);
     declare_parameter<double>("land_switch_height", 0.38);
     declare_parameter<double>("arrival_tolerance", 0.08);
+    declare_parameter<double>("takeoff_tolerance", 0.20);
     declare_parameter<double>("idle_after_land_seconds", 5.0);
     declare_parameter<double>("follow_stable_time", 1.0);
     declare_parameter<double>("return_tolerance", 0.08);
@@ -57,6 +58,7 @@ public:
           hold_x_ = start_x_;
           hold_y_ = start_y_;
           initial_yaw_ = yaw_from_pose(*msg);
+          target_yaw_ = initial_yaw_;
           reference_captured_ = true;
           RCLCPP_INFO(
             get_logger(), "Takeoff reference: x=%.3f, y=%.3f, yaw=%.1f deg",
@@ -163,7 +165,7 @@ private:
       case Phase::TAKEOFF:
         // Keep X/Y fixed; following starts only after reaching flight height.
         publish_position(start_x_, start_y_, target_z);
-        if (std::abs(pose_.pose.position.z - target_z) <= arrival_tolerance()) {
+        if (std::abs(pose_.pose.position.z - target_z) <= takeoff_tolerance()) {
           phase_ = Phase::FOLLOW_APPROACH;
           RCLCPP_INFO(get_logger(),
             "Takeoff complete; approaching vehicle target at fixed height");
@@ -196,7 +198,7 @@ private:
         break;
 
       case Phase::IDLE_AFTER_VEHICLE_LAND:
-        publish_vehicle_target(target_z);
+        publish_vehicle_target_with_current_yaw(target_z);
         if ((now() - idle_start_time_).seconds() >= idle_after_land_seconds()) {
           stream_count_ = 0;
           last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
@@ -206,7 +208,7 @@ private:
         break;
 
       case Phase::STREAM_VEHICLE_SETPOINTS:
-        publish_vehicle_target(target_z);
+        publish_vehicle_target_with_current_yaw(target_z);
         if (vehicle_target_available()) {
           if (++stream_count_ >= 100) {
             phase_ = Phase::REARM_AND_OFFBOARD;
@@ -219,9 +221,10 @@ private:
         break;
 
       case Phase::REARM_AND_OFFBOARD:
-        publish_vehicle_target(target_z);
+        publish_vehicle_target_with_current_yaw(target_z);
         ensure_offboard_and_armed();
         if (state_.mode == "OFFBOARD" && state_.armed) {
+          capture_takeoff_yaw("Vehicle takeoff armed");
           follow_stable_ = false;
           phase_ = Phase::VEHICLE_TAKEOFF;
           RCLCPP_INFO(get_logger(), "Taking off from vehicle target to %.2f m", target_z);
@@ -287,6 +290,8 @@ private:
       return;
     }
 
+    publish_position(hold_x_, hold_y_, target_z);
+    request_disarm();
     if (!state_.armed) {
       idle_start_time_ = now();
       follow_stable_ = false;
@@ -306,6 +311,8 @@ private:
       return;
     }
 
+    publish_position(start_x_, start_y_, target_z);
+    request_disarm();
     if (!state_.armed) {
       phase_ = Phase::FINISHED;
       RCLCPP_INFO(get_logger(), "Follow-and-land mission finished");
@@ -316,6 +323,12 @@ private:
   {
     update_horizontal_follow_target();
     publish_position(hold_x_, hold_y_, target_z);
+  }
+
+  void publish_vehicle_target_with_current_yaw(double target_z)
+  {
+    update_horizontal_follow_target();
+    publish_position(hold_x_, hold_y_, target_z, yaw_from_pose(pose_));
   }
 
   bool vehicle_target_available() const
@@ -395,6 +408,28 @@ private:
     RCLCPP_INFO(get_logger(), "Landing mode requested: %s", land_mode().c_str());
   }
 
+  void request_disarm()
+  {
+    if (!state_.armed || (now() - last_request_time_).seconds() < 1.0 ||
+      !arm_client_->service_is_ready())
+    {
+      return;
+    }
+
+    auto request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
+    request->value = false;
+    arm_client_->async_send_request(
+      request,
+      [this](rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedFuture future) {
+        const auto response = future.get();
+        RCLCPP_INFO(
+          get_logger(), "Disarm response: success=%s, result=%u",
+          response->success ? "true" : "false", response->result);
+      });
+    last_request_time_ = now();
+    RCLCPP_INFO(get_logger(), "Disarm requested");
+  }
+
   void run_follow_fast_descent(double takeoff_z)
   {
     update_horizontal_follow_target();
@@ -462,6 +497,11 @@ private:
 
   void publish_position(double x, double y, double z)
   {
+    publish_position(x, y, z, target_yaw_);
+  }
+
+  void publish_position(double x, double y, double z, double yaw)
+  {
     mavros_msgs::msg::PositionTarget msg;
     msg.header.stamp = now();
     msg.header.frame_id = "map";
@@ -476,8 +516,16 @@ private:
     msg.position.x = x;
     msg.position.y = y;
     msg.position.z = z;
-    msg.yaw = initial_yaw_;
+    msg.yaw = yaw;
     setpoint_pub_->publish(msg);
+  }
+
+  void capture_takeoff_yaw(const std::string & label)
+  {
+    target_yaw_ = yaw_from_pose(pose_);
+    RCLCPP_INFO(
+      get_logger(), "%s yaw captured: %.1f deg", label.c_str(),
+      target_yaw_ * 180.0 / M_PI);
   }
 
   void publish_track_start_once()
@@ -570,6 +618,8 @@ private:
   { return get_parameter("land_switch_height").as_double(); }
   double arrival_tolerance() const
   { return std::max(0.02, get_parameter("arrival_tolerance").as_double()); }
+  double takeoff_tolerance() const
+  { return std::max(0.02, get_parameter("takeoff_tolerance").as_double()); }
   double idle_after_land_seconds() const
   { return std::max(0.0, get_parameter("idle_after_land_seconds").as_double()); }
   double follow_stable_time() const
@@ -621,6 +671,7 @@ private:
   double start_x_{0.0};
   double start_y_{0.0};
   double initial_yaw_{0.0};
+  double target_yaw_{0.0};
   double vehicle_x_{0.0};
   double vehicle_y_{0.0};
   double hold_x_{0.0};
