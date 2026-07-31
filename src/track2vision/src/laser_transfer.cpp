@@ -34,6 +34,12 @@ public:
         jump_release_max_m_ = declare_parameter<double>("jump_release_max_m", 0.32);
         jump_confirm_frames_ = declare_parameter<int>("jump_confirm_frames", 3);
         jump_confirm_time_s_ = declare_parameter<double>("jump_confirm_time_s", 0.20);
+        hypothesis_switch_margin_m_ = declare_parameter<double>("hypothesis_switch_margin_m", 0.03);
+        release_confirm_frames_ = declare_parameter<int>("release_confirm_frames", 15);
+        release_confirm_time_s_ = declare_parameter<double>("release_confirm_time_s", 1.00);
+        release_block_descent_speed_mps_ = declare_parameter<double>("release_block_descent_speed_mps", 0.15);
+        reenter_inhibit_time_s_ = declare_parameter<double>("reenter_inhibit_time_s", 1.50);
+        enter_block_descent_speed_mps_ = declare_parameter<double>("enter_block_descent_speed_mps", 0.30);
         raw_z_filter_alpha_ = declare_parameter<double>("raw_z_filter_alpha", 0.35);
         corrected_z_filter_alpha_ = declare_parameter<double>("corrected_z_filter_alpha", 0.45);
         max_corrected_z_step_m_ = declare_parameter<double>("max_corrected_z_step_m", 0.04);
@@ -578,12 +584,19 @@ private:
         }
 
         const double instant_dz = previous_raw_z_valid_ ? raw_z_enu - previous_raw_z_enu_ : 0.0;
-        const int confirm_frames = std::max(1, jump_confirm_frames_);
+        const int enter_confirm_frames = std::max(1, jump_confirm_frames_);
+        if (reenter_inhibit_active_ && stamp >= reenter_inhibit_until_)
+        {
+            reenter_inhibit_active_ = false;
+        }
+        const bool enter_allowed =
+            !reenter_inhibit_active_ &&
+            filtered_vz_enu_ >= -std::max(0.0, enter_block_descent_speed_mps_);
 
         switch (height_state_)
         {
         case HeightCompensationState::GROUND_NORMAL:
-            if (within_window(-instant_dz, jump_enter_min_m_, jump_enter_max_m_))
+            if (enter_allowed && within_window(-instant_dz, jump_enter_min_m_, jump_enter_max_m_))
             {
                 candidate_start_time_ = stamp;
                 candidate_baseline_z_ = previous_raw_z_enu_;
@@ -617,14 +630,16 @@ private:
                 break;
             }
 
-            if (enter_candidate_count_ >= confirm_frames)
+            if (enter_candidate_count_ >= enter_confirm_frames)
             {
                 surface_bias_m_ = std::clamp(
                     std::max(candidate_drop_peak_m_, target_surface_height_m_),
                     target_surface_height_min_m_,
                     target_surface_height_max_m_);
+                target_surface_bias_m_ = surface_bias_m_;
                 target_detected_ = true;
                 height_state_ = HeightCompensationState::TARGET_OVERHEAD;
+                release_candidate_count_ = 0;
                 zero_fake_vertical_velocity(stamp);
                 RCLCPP_INFO(
                     this->get_logger(),
@@ -635,51 +650,80 @@ private:
         }
 
         case HeightCompensationState::TARGET_OVERHEAD:
-            if (!release_locked() && within_window(instant_dz, jump_release_min_m_, jump_release_max_m_))
-            {
-                release_start_time_ = stamp;
-                release_baseline_z_ = previous_raw_z_enu_;
-                release_restore_bias_m_ = surface_bias_m_;
-                surface_bias_m_ = 0.0;
-                release_candidate_count_ = 1;
-                height_state_ = HeightCompensationState::TARGET_RELEASE;
-                zero_fake_vertical_velocity(stamp);
-            }
+            update_surface_hypothesis(stamp, raw_z_enu);
             break;
 
         case HeightCompensationState::TARGET_RELEASE:
-        {
-            if (release_locked())
-            {
-                surface_bias_m_ = release_restore_bias_m_;
-                release_candidate_count_ = 0;
-                height_state_ = HeightCompensationState::TARGET_OVERHEAD;
-                break;
-            }
-
-            const double sustained_rise = raw_z_filtered_ - release_baseline_z_;
-            if (within_window(sustained_rise, jump_release_min_m_, jump_release_max_m_))
-            {
-                ++release_candidate_count_;
-            }
-            else if ((stamp - release_start_time_).seconds() > jump_confirm_time_s_)
-            {
-                surface_bias_m_ = release_restore_bias_m_;
-                release_candidate_count_ = 0;
-                height_state_ = HeightCompensationState::TARGET_OVERHEAD;
-                break;
-            }
-
-            if (release_candidate_count_ >= confirm_frames)
-            {
-                surface_bias_m_ = 0.0;
-                target_detected_ = false;
-                height_state_ = HeightCompensationState::GROUND_NORMAL;
-                zero_fake_vertical_velocity(stamp);
-                RCLCPP_INFO(this->get_logger(), "Target surface released. Height bias cleared.");
-            }
+            update_surface_hypothesis(stamp, raw_z_enu);
             break;
         }
+    }
+
+    void update_surface_hypothesis(const rclcpp::Time &stamp, const double raw_z_enu)
+    {
+        const double target_bias = std::clamp(
+            target_surface_bias_m_,
+            target_surface_height_min_m_,
+            target_surface_height_max_m_);
+        target_surface_bias_m_ = target_bias;
+
+        const double dt = range_received_ ? (stamp - latest_range_time_).seconds() : 0.0;
+        const double prediction_dt = std::clamp(dt, 0.0, 0.20);
+        const double predicted_z = range_received_
+                                       ? latest_range_z_enu_ + filtered_vz_enu_ * prediction_dt
+                                       : raw_z_enu + surface_bias_m_;
+
+        const bool currently_target = surface_bias_m_ > target_bias * 0.50;
+        const double current_bias = currently_target ? target_bias : 0.0;
+        const double other_bias = currently_target ? 0.0 : target_bias;
+        const double current_error = std::abs((raw_z_enu + current_bias) - predicted_z);
+        const double other_error = std::abs((raw_z_enu + other_bias) - predicted_z);
+
+        if (other_error + std::max(0.0, hypothesis_switch_margin_m_) < current_error)
+        {
+            surface_bias_m_ = other_bias;
+            zero_fake_vertical_velocity(stamp);
+        }
+        else
+        {
+            surface_bias_m_ = current_bias;
+        }
+
+        target_detected_ = true;
+        height_state_ = surface_bias_m_ > target_bias * 0.50
+                            ? HeightCompensationState::TARGET_OVERHEAD
+                            : HeightCompensationState::TARGET_RELEASE;
+
+        update_target_release_confirmation(stamp);
+    }
+
+    void update_target_release_confirmation(const rclcpp::Time &stamp)
+    {
+        const bool beam_on_ground = surface_bias_m_ <= target_surface_bias_m_ * 0.50;
+        const bool descending = filtered_vz_enu_ < -std::max(0.0, release_block_descent_speed_mps_);
+
+        if (!beam_on_ground || release_locked() || landing_on_target_ || descending)
+        {
+            release_candidate_count_ = 0;
+            return;
+        }
+
+        if (release_candidate_count_ == 0)
+        {
+            release_start_time_ = stamp;
+        }
+        ++release_candidate_count_;
+
+        const double release_elapsed_s = (stamp - release_start_time_).seconds();
+        if (release_candidate_count_ >= std::max(1, release_confirm_frames_) &&
+            release_elapsed_s >= release_confirm_time_s_)
+        {
+            surface_bias_m_ = 0.0;
+            target_detected_ = false;
+            height_state_ = HeightCompensationState::GROUND_NORMAL;
+            inhibit_reenter(stamp);
+            zero_fake_vertical_velocity(stamp);
+            RCLCPP_INFO(this->get_logger(), "Target surface released after stable ground hypothesis.");
         }
     }
 
@@ -707,6 +751,19 @@ private:
         filtered_vz_enu_ = 0.0;
         fake_vz_zero_until_ = stamp + rclcpp::Duration::from_seconds(std::max(0.0, fake_vz_zero_time_s_));
         fake_vz_zero_active_ = true;
+    }
+
+    void inhibit_reenter(const rclcpp::Time &stamp)
+    {
+        const double inhibit_s = std::max(0.0, reenter_inhibit_time_s_);
+        if (inhibit_s <= 0.0)
+        {
+            reenter_inhibit_active_ = false;
+            return;
+        }
+
+        reenter_inhibit_until_ = stamp + rclcpp::Duration::from_seconds(inhibit_s);
+        reenter_inhibit_active_ = true;
     }
 
     std::string height_state_name() const
@@ -811,12 +868,19 @@ private:
     double jump_release_max_m_ = 0.32;
     int jump_confirm_frames_ = 3;
     double jump_confirm_time_s_ = 0.20;
+    double hypothesis_switch_margin_m_ = 0.03;
+    int release_confirm_frames_ = 15;
+    double release_confirm_time_s_ = 1.00;
+    double release_block_descent_speed_mps_ = 0.15;
+    double reenter_inhibit_time_s_ = 1.50;
+    double enter_block_descent_speed_mps_ = 0.30;
     double raw_z_filter_alpha_ = 0.35;
     double corrected_z_filter_alpha_ = 0.45;
     double max_corrected_z_step_m_ = 0.04;
     double fake_vz_zero_time_s_ = 0.25;
     double landing_release_lock_z_m_ = 0.65;
     double surface_bias_m_ = 0.0;
+    double target_surface_bias_m_ = 0.19;
     bool landing_on_target_ = false;
     bool target_detected_ = false;
     HeightCompensationState height_state_ = HeightCompensationState::GROUND_NORMAL;
@@ -830,6 +894,8 @@ private:
     int release_candidate_count_ = 0;
     rclcpp::Time fake_vz_zero_until_;
     bool fake_vz_zero_active_ = false;
+    rclcpp::Time reenter_inhibit_until_;
+    bool reenter_inhibit_active_ = false;
 
     struct PoseSample
     {

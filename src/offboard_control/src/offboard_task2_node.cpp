@@ -25,8 +25,8 @@ public:
     declare_parameter<std::string>("track_start_command", "start");
     declare_parameter<double>("track_command_publish_period", 0.2);
     declare_parameter<double>("flight_height", 1.5);
-    declare_parameter<double>("offset_x", 0.275);
-    declare_parameter<double>("offset_y", 0.835);
+    declare_parameter<double>("offset_x", 0.375);
+    declare_parameter<double>("offset_y", 0.875);
     declare_parameter<double>("follow_tolerance", 0.10);
     declare_parameter<double>("approach_tolerance", 0.15);
     declare_parameter<double>("landing_follow_tolerance", 0.08);
@@ -42,6 +42,11 @@ public:
     declare_parameter<double>("land_request_height", 0.65);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
+    declare_parameter<double>("first_land_lowpass_deadband", 0.1);
+    declare_parameter<double>("first_land_lowpass_near_distance", 0.1);
+    declare_parameter<double>("first_land_lowpass_far_distance", 3.0);
+    declare_parameter<double>("first_land_lowpass_near_tau", 0.3);
+    declare_parameter<double>("first_land_lowpass_far_tau", 2.0);
     declare_parameter<bool>("auto_set_mode", true);
     declare_parameter<bool>("auto_arm", true);
     declare_parameter<std::string>("land_mode", "AUTO.LAND");
@@ -515,6 +520,10 @@ private:
 
   void publish_position(double x, double y, double z, double yaw)
   {
+    double command_x = x;
+    double command_y = y;
+    apply_first_land_lowpass(command_x, command_y);
+
     mavros_msgs::msg::PositionTarget msg;
     msg.header.stamp = now();
     msg.header.frame_id = "map";
@@ -526,11 +535,85 @@ private:
       mavros_msgs::msg::PositionTarget::IGNORE_AFY |
       mavros_msgs::msg::PositionTarget::IGNORE_AFZ |
       mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
-    msg.position.x = x;
-    msg.position.y = y;
+    msg.position.x = command_x;
+    msg.position.y = command_y;
     msg.position.z = z;
     msg.yaw = yaw;
     setpoint_pub_->publish(msg);
+  }
+
+  void apply_first_land_lowpass(double & x, double & y)
+  {
+    if (!first_land_lowpass_phase() || !pose_received_) {
+      reset_first_land_lowpass();
+      return;
+    }
+
+    const double target_distance = horizontal_error(x, y);
+    if (target_distance < first_land_lowpass_deadband()) {
+      reset_first_land_lowpass();
+      return;
+    }
+
+    const auto current_time = now();
+    if (!first_land_lowpass_active_) {
+      first_land_filtered_x_ = pose_.pose.position.x;
+      first_land_filtered_y_ = pose_.pose.position.y;
+      first_land_lowpass_last_time_ = current_time;
+      first_land_lowpass_active_ = true;
+    }
+
+    const double dt = std::clamp(
+      (current_time - first_land_lowpass_last_time_).seconds(), 0.001, 0.1);
+    first_land_lowpass_last_time_ = current_time;
+
+    const double tau = first_land_lowpass_tau(target_distance);
+    if (tau <= 0.0) {
+      first_land_filtered_x_ = x;
+      first_land_filtered_y_ = y;
+    } else {
+      const double alpha = dt / (tau + dt);
+      first_land_filtered_x_ += alpha * (x - first_land_filtered_x_);
+      first_land_filtered_y_ += alpha * (y - first_land_filtered_y_);
+    }
+
+    x = first_land_filtered_x_;
+    y = first_land_filtered_y_;
+  }
+
+  void reset_first_land_lowpass()
+  {
+    first_land_lowpass_active_ = false;
+  }
+
+  bool first_land_lowpass_phase() const
+  {
+    switch (phase_) {
+      case Phase::TAKEOFF:
+      case Phase::FOLLOW_APPROACH:
+      case Phase::FOLLOW_FAST_DESCEND:
+      case Phase::FOLLOW_SLOW_DESCEND:
+      case Phase::VEHICLE_LAND:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  double first_land_lowpass_tau(double distance) const
+  {
+    const double near_distance = first_land_lowpass_near_distance();
+    const double far_distance = first_land_lowpass_far_distance();
+    const double near_tau = first_land_lowpass_near_tau();
+    const double far_tau = first_land_lowpass_far_tau();
+
+    if (far_distance <= near_distance) {
+      return distance >= far_distance ? far_tau : near_tau;
+    }
+
+    const double ratio = std::clamp(
+      (distance - near_distance) / (far_distance - near_distance), 0.0, 1.0);
+    return near_tau + ratio * (far_tau - near_tau);
   }
 
   void capture_takeoff_yaw(const std::string & label)
@@ -686,6 +769,33 @@ private:
     return std::max(0.01, get_parameter("max_vehicle_jump").as_double());
   }
 
+  double first_land_lowpass_deadband() const
+  {
+    return std::max(0.0, get_parameter("first_land_lowpass_deadband").as_double());
+  }
+
+  double first_land_lowpass_near_distance() const
+  {
+    return std::max(0.0, get_parameter("first_land_lowpass_near_distance").as_double());
+  }
+
+  double first_land_lowpass_far_distance() const
+  {
+    return std::max(
+      first_land_lowpass_near_distance(),
+      get_parameter("first_land_lowpass_far_distance").as_double());
+  }
+
+  double first_land_lowpass_near_tau() const
+  {
+    return std::max(0.0, get_parameter("first_land_lowpass_near_tau").as_double());
+  }
+
+  double first_land_lowpass_far_tau() const
+  {
+    return std::max(0.0, get_parameter("first_land_lowpass_far_tau").as_double());
+  }
+
   static double yaw_from_pose(const geometry_msgs::msg::PoseStamped & pose)
   {
     const auto & q = pose.pose.orientation;
@@ -705,6 +815,7 @@ private:
   bool land_stable_{false};
   bool offboard_confirmed_{false};
   bool arm_confirmed_{false};
+  bool first_land_lowpass_active_{false};
   int stream_count_{0};
   double start_x_{0.0};
   double start_y_{0.0};
@@ -714,6 +825,8 @@ private:
   double vehicle_y_{0.0};
   double hold_x_{0.0};
   double hold_y_{0.0};
+  double first_land_filtered_x_{0.0};
+  double first_land_filtered_y_{0.0};
   rclcpp::Time last_request_time_;
   rclcpp::Time last_track_command_time_;
   rclcpp::Time last_vehicle_time_;
@@ -721,6 +834,7 @@ private:
   rclcpp::Time idle_start_time_;
   rclcpp::Time follow_stable_since_;
   rclcpp::Time land_stable_since_;
+  rclcpp::Time first_land_lowpass_last_time_;
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr vehicle_pose_sub_;
