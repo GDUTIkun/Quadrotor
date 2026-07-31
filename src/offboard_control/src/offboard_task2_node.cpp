@@ -27,6 +27,8 @@ public:
     declare_parameter<double>("offset_x", 0.305);
     declare_parameter<double>("offset_y", 0.875);
     declare_parameter<double>("follow_tolerance", 0.10);
+    declare_parameter<double>("approach_tolerance", 0.20);
+    declare_parameter<double>("landing_follow_tolerance", 0.08);
     declare_parameter<double>("fast_descent_height", 0.6);
     declare_parameter<double>("fast_descent_speed", 0.40);
     declare_parameter<double>("descent_speed", 0.08);
@@ -176,7 +178,7 @@ private:
         update_horizontal_follow_target();
         publish_position(hold_x_, hold_y_, target_z);
         if (!vehicle_follow_locked_ && vehicle_pose_fresh() &&
-          horizontal_error(hold_x_, hold_y_) <= follow_tolerance())
+          horizontal_error(hold_x_, hold_y_) <= approach_tolerance())
         {
           descent_start_time_ = now();
           phase_ = Phase::FOLLOW_FAST_DESCEND;
@@ -453,13 +455,23 @@ private:
     const double start_z = fast_descent_height(takeoff_z);
     const double switch_z = std::clamp(land_switch_height(), 0.08, start_z);
     const double target_z = std::max(switch_z, start_z - descent_speed() * elapsed);
+    const double xy_error = horizontal_error(hold_x_, hold_y_);
     publish_position(hold_x_, hold_y_, target_z);
     if (target_z <= switch_z + 1e-6 &&
-      pose_.pose.position.z <= switch_z + arrival_tolerance())
+      pose_.pose.position.z <= switch_z + arrival_tolerance() &&
+      !vehicle_follow_locked_ && vehicle_pose_fresh() &&
+      xy_error <= landing_follow_tolerance())
     {
       phase_ = Phase::VEHICLE_LAND;
       last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
       RCLCPP_INFO(get_logger(), "Low altitude reached; requesting land mode");
+    } else if (target_z <= switch_z + 1e-6 &&
+      pose_.pose.position.z <= switch_z + arrival_tolerance())
+    {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "At land switch height, waiting for landing XY tolerance: error=%.3f m, tolerance=%.3f m",
+        xy_error, landing_follow_tolerance());
     }
   }
 
@@ -605,6 +617,10 @@ private:
 
   double follow_tolerance() const
   { return std::max(0.02, get_parameter("follow_tolerance").as_double()); }
+  double approach_tolerance() const
+  { return std::max(0.02, get_parameter("approach_tolerance").as_double()); }
+  double landing_follow_tolerance() const
+  { return std::max(0.02, get_parameter("landing_follow_tolerance").as_double()); }
   double fast_descent_height(double takeoff_z) const
   {
     const double switch_z = std::clamp(land_switch_height(), 0.08, takeoff_z);
