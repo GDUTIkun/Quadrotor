@@ -23,6 +23,7 @@ public:
     declare_parameter<std::string>("vehicle_topic", "/car/target_pose");
     declare_parameter<std::string>("track_command_topic", "/car/track_runner/command");
     declare_parameter<std::string>("track_start_command", "start");
+    declare_parameter<double>("track_command_publish_period", 0.2);
     declare_parameter<double>("flight_height", 1.5);
     declare_parameter<double>("offset_x", 0.275);
     declare_parameter<double>("offset_y", 0.875);
@@ -158,7 +159,6 @@ private:
         publish_position(start_x_, start_y_, target_z);
         ensure_offboard_and_armed();
         if (state_.mode == "OFFBOARD" && state_.armed) {
-          publish_track_start_once();
           phase_ = Phase::TAKEOFF;
           RCLCPP_INFO(get_logger(), "Taking off to %.2f m", target_z);
         }
@@ -282,6 +282,7 @@ private:
       case Phase::FINISHED:
         break;
     }
+    publish_track_start_command_if_needed();
   }
 
   void handle_vehicle_landing(double target_z)
@@ -540,14 +541,31 @@ private:
       target_yaw_ * 180.0 / M_PI);
   }
 
-  void publish_track_start_once()
+  void publish_track_start_command_if_needed()
   {
-    if (track_start_sent_) return;
+    if (phase_ == Phase::WAIT_FOR_POSE || phase_ == Phase::STREAM_SETPOINTS ||
+      phase_ == Phase::ARM_AND_OFFBOARD || phase_ == Phase::FINISHED)
+    {
+      return;
+    }
+    if (state_.mode != "OFFBOARD" || !state_.armed) {
+      return;
+    }
+
+    const auto current_time = now();
+    if (last_track_command_time_.nanoseconds() != 0 &&
+      (current_time - last_track_command_time_).seconds() < track_command_publish_period())
+    {
+      return;
+    }
+
     std_msgs::msg::String message;
     message.data = get_parameter("track_start_command").as_string();
     track_command_pub_->publish(message);
-    track_start_sent_ = true;
-    RCLCPP_INFO(get_logger(), "Vehicle track command published: %s", message.data.c_str());
+    last_track_command_time_ = current_time;
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "Vehicle track command publishing: %s", message.data.c_str());
   }
 
   void ensure_offboard_and_armed()
@@ -658,6 +676,11 @@ private:
     return std::max(0.1, get_parameter("vehicle_timeout").as_double());
   }
 
+  double track_command_publish_period() const
+  {
+    return std::max(0.05, get_parameter("track_command_publish_period").as_double());
+  }
+
   double max_vehicle_jump() const
   {
     return std::max(0.01, get_parameter("max_vehicle_jump").as_double());
@@ -678,7 +701,6 @@ private:
   bool reference_captured_{false};
   bool vehicle_pose_received_{false};
   bool vehicle_follow_locked_{false};
-  bool track_start_sent_{false};
   bool follow_stable_{false};
   bool land_stable_{false};
   bool offboard_confirmed_{false};
@@ -693,6 +715,7 @@ private:
   double hold_x_{0.0};
   double hold_y_{0.0};
   rclcpp::Time last_request_time_;
+  rclcpp::Time last_track_command_time_;
   rclcpp::Time last_vehicle_time_;
   rclcpp::Time descent_start_time_;
   rclcpp::Time idle_start_time_;
