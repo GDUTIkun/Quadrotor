@@ -36,8 +36,8 @@ public:
     declare_parameter<double>("arrival_tolerance", 0.08);
     declare_parameter<double>("takeoff_tolerance", 0.20);
     declare_parameter<double>("idle_after_land_seconds", 5.0);
-    declare_parameter<double>("follow_stable_time", 1.0);
-    declare_parameter<double>("return_tolerance", 0.08);
+    declare_parameter<double>("follow_stable_time", 1.5);
+    declare_parameter<double>("return_tolerance", 0.07);
     declare_parameter<double>("land_request_height", 0.5);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
