@@ -184,6 +184,7 @@ install(TARGETS
 )
 set(OFFBOARD_CONTROL_SCRIPTS
   scripts/compare_input_shaping.py
+  scripts/key_mission_launcher.py
   scripts/plot_pd_velocity.py
   scripts/plot_simple_setpoint_actual.py
   scripts/servo_pwm_node.py
@@ -197,6 +198,13 @@ foreach(script ${OFFBOARD_CONTROL_SCRIPTS})
     )
   endif()
 endforeach()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
+  install(DIRECTORY
+    launch/
+    DESTINATION share/${PROJECT_NAME}/launch
+  )
+endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include")
   # 安装Python模块（关键修正）
   install(DIRECTORY

@@ -24,7 +24,7 @@ public:
     declare_parameter<std::string>("track_command_topic", "/car/track_runner/command");
     declare_parameter<std::string>("track_start_command", "start");
     declare_parameter<double>("flight_height", 1.5);
-    declare_parameter<double>("offset_x", 0.305);
+    declare_parameter<double>("offset_x", 0.275);
     declare_parameter<double>("offset_y", 0.875);
     declare_parameter<double>("follow_tolerance", 0.10);
     declare_parameter<double>("approach_tolerance", 0.20);

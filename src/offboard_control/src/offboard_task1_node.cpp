@@ -44,7 +44,7 @@ public:
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
     declare_parameter<std::string>("status_topic", "/offboard_task1/status");
     declare_parameter<double>("status_publish_period", 1.0);
-    declare_parameter<double>("release_angle", 0.0);
+    declare_parameter<double>("release_angle", 30.0);
     declare_parameter<std::string>("land_mode", "AUTO.LAND");
     declare_parameter<bool>("auto_set_mode", true);
     declare_parameter<bool>("auto_arm", true);
