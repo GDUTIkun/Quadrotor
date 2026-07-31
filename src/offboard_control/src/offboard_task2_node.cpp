@@ -25,16 +25,17 @@ public:
     declare_parameter<std::string>("track_start_command", "start");
     declare_parameter<double>("track_command_publish_period", 0.2);
     declare_parameter<double>("flight_height", 1.5);
-    declare_parameter<double>("offset_x", 0.375);
-    declare_parameter<double>("offset_y", 0.875);
-    declare_parameter<double>("follow_tolerance", 0.10);
+    declare_parameter<double>("offset_x", 0.345);
+    declare_parameter<double>("offset_y", 0.855);
+    declare_parameter<double>("follow_tolerance", 0.1);
     declare_parameter<double>("approach_tolerance", 0.15);
-    declare_parameter<double>("landing_follow_tolerance", 0.08);
-    declare_parameter<double>("fast_descent_height", 0.7);
-    declare_parameter<double>("fast_descent_speed", 0.30);
+    declare_parameter<double>("approach_stable_time", 0.3);
+    declare_parameter<double>("landing_follow_tolerance", 0.15);
+    declare_parameter<double>("fast_descent_height", 0.6);
+    declare_parameter<double>("fast_descent_speed", 0.6);
     declare_parameter<double>("descent_speed", 0.05);
     declare_parameter<double>("land_switch_height", 0.38);
-    declare_parameter<double>("arrival_tolerance", 0.08);
+    declare_parameter<double>("arrival_tolerance", 0.05);
     declare_parameter<double>("takeoff_tolerance", 0.20);
     declare_parameter<double>("idle_after_land_seconds", 5.0);
     declare_parameter<double>("follow_stable_time", 1.5);
@@ -42,10 +43,10 @@ public:
     declare_parameter<double>("land_request_height", 0.65);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
-    declare_parameter<double>("first_land_lowpass_deadband", 0.1);
-    declare_parameter<double>("first_land_lowpass_near_distance", 0.1);
-    declare_parameter<double>("first_land_lowpass_far_distance", 3.0);
-    declare_parameter<double>("first_land_lowpass_near_tau", 0.3);
+    declare_parameter<double>("first_land_lowpass_deadband", 0.180);
+    declare_parameter<double>("first_land_lowpass_near_distance", 0.180);
+    declare_parameter<double>("first_land_lowpass_far_distance", 1.6);
+    declare_parameter<double>("first_land_lowpass_near_tau", 0.0);
     declare_parameter<double>("first_land_lowpass_far_tau", 2.0);
     declare_parameter<bool>("auto_set_mode", true);
     declare_parameter<bool>("auto_arm", true);
@@ -173,6 +174,7 @@ private:
         // Keep X/Y fixed; following starts only after reaching flight height.
         publish_position(start_x_, start_y_, target_z);
         if (std::abs(pose_.pose.position.z - target_z) <= takeoff_tolerance()) {
+          approach_stable_ = false;
           phase_ = Phase::FOLLOW_APPROACH;
           RCLCPP_INFO(get_logger(),
             "Takeoff complete; approaching vehicle target at fixed height");
@@ -182,10 +184,9 @@ private:
       case Phase::FOLLOW_APPROACH:
         update_horizontal_follow_target();
         publish_position(hold_x_, hold_y_, target_z);
-        if (!vehicle_follow_locked_ && vehicle_pose_fresh() &&
-          horizontal_error(hold_x_, hold_y_) <= approach_tolerance())
-        {
+        if (approach_stable_for_descent()) {
           descent_start_time_ = now();
+          approach_stable_ = false;
           phase_ = Phase::FOLLOW_FAST_DESCEND;
           RCLCPP_INFO(get_logger(),
             "Vehicle target reached; starting fast follow descent");
@@ -208,6 +209,7 @@ private:
         publish_vehicle_target_with_current_yaw(target_z);
         if ((now() - idle_start_time_).seconds() >= idle_after_land_seconds()) {
           stream_count_ = 0;
+          second_takeoff_target_captured_ = false;
           last_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
           phase_ = Phase::STREAM_VEHICLE_SETPOINTS;
           RCLCPP_INFO(get_logger(), "Idle complete; streaming vehicle takeoff setpoints");
@@ -231,6 +233,8 @@ private:
         publish_vehicle_target_with_current_yaw(target_z);
         ensure_offboard_and_armed();
         if (state_.mode == "OFFBOARD" && state_.armed) {
+          update_horizontal_follow_target();
+          capture_second_takeoff_target();
           capture_takeoff_yaw("Vehicle takeoff armed");
           follow_stable_ = false;
           phase_ = Phase::VEHICLE_TAKEOFF;
@@ -239,7 +243,7 @@ private:
         break;
 
       case Phase::VEHICLE_TAKEOFF:
-        publish_vehicle_target(target_z);
+        publish_second_takeoff_target(target_z);
         if (height_reached(target_z)) {
           follow_stable_ = false;
           phase_ = Phase::SECOND_FOLLOW;
@@ -248,8 +252,8 @@ private:
         break;
 
       case Phase::SECOND_FOLLOW:
-        publish_vehicle_target(target_z);
-        if (vehicle_target_stable()) {
+        publish_second_takeoff_target(target_z);
+        if (second_takeoff_target_stable()) {
           phase_ = Phase::RETURN_HOME;
           RCLCPP_INFO(
             get_logger(), "Vehicle target stable for %.1f s; returning to takeoff point",
@@ -339,6 +343,24 @@ private:
     publish_position(hold_x_, hold_y_, target_z, yaw_from_pose(pose_));
   }
 
+  void publish_second_takeoff_target(double target_z)
+  {
+    if (!second_takeoff_target_captured_) {
+      capture_second_takeoff_target();
+    }
+    publish_position(second_takeoff_x_, second_takeoff_y_, target_z);
+  }
+
+  void capture_second_takeoff_target()
+  {
+    second_takeoff_x_ = hold_x_;
+    second_takeoff_y_ = hold_y_;
+    second_takeoff_target_captured_ = true;
+    RCLCPP_INFO(
+      get_logger(), "Second takeoff target locked at x=%.3f y=%.3f",
+      second_takeoff_x_, second_takeoff_y_);
+  }
+
   bool vehicle_target_available() const
   {
     return !vehicle_follow_locked_ && vehicle_pose_fresh();
@@ -362,6 +384,32 @@ private:
       follow_stable_since_ = now();
       RCLCPP_INFO(
         get_logger(), "Vehicle target reached (error %.3f m); checking stability", error);
+      return false;
+    }
+
+    return (now() - follow_stable_since_).seconds() >= follow_stable_time();
+  }
+
+  bool second_takeoff_target_stable()
+  {
+    if (!second_takeoff_target_captured_) {
+      follow_stable_ = false;
+      return false;
+    }
+
+    const double error = horizontal_error(second_takeoff_x_, second_takeoff_y_);
+    if (error > follow_tolerance()) {
+      follow_stable_ = false;
+      return false;
+    }
+
+    if (!follow_stable_) {
+      follow_stable_ = true;
+      follow_stable_since_ = now();
+      RCLCPP_INFO(
+        get_logger(),
+        "Second takeoff target reached (error %.3f m); checking stability",
+        error);
       return false;
     }
 
@@ -399,6 +447,31 @@ private:
     }
 
     return (now() - land_stable_since_).seconds() >= follow_stable_time();
+  }
+
+  bool approach_stable_for_descent()
+  {
+    if (vehicle_follow_locked_ || !vehicle_pose_fresh()) {
+      approach_stable_ = false;
+      return false;
+    }
+
+    const double error = horizontal_error(hold_x_, hold_y_);
+    if (error > approach_tolerance()) {
+      approach_stable_ = false;
+      return false;
+    }
+
+    if (!approach_stable_) {
+      approach_stable_ = true;
+      approach_stable_since_ = now();
+      RCLCPP_INFO(
+        get_logger(), "Approach target reached (error %.3f m); checking stability",
+        error);
+      return false;
+    }
+
+    return (now() - approach_stable_since_).seconds() >= approach_stable_time();
   }
 
   void request_land_mode()
@@ -720,6 +793,8 @@ private:
   { return std::max(0.02, get_parameter("follow_tolerance").as_double()); }
   double approach_tolerance() const
   { return std::max(0.02, get_parameter("approach_tolerance").as_double()); }
+  double approach_stable_time() const
+  { return std::max(0.0, get_parameter("approach_stable_time").as_double()); }
   double landing_follow_tolerance() const
   { return std::max(0.02, get_parameter("landing_follow_tolerance").as_double()); }
   double fast_descent_height(double takeoff_z) const
@@ -813,9 +888,11 @@ private:
   bool vehicle_follow_locked_{false};
   bool follow_stable_{false};
   bool land_stable_{false};
+  bool approach_stable_{false};
   bool offboard_confirmed_{false};
   bool arm_confirmed_{false};
   bool first_land_lowpass_active_{false};
+  bool second_takeoff_target_captured_{false};
   int stream_count_{0};
   double start_x_{0.0};
   double start_y_{0.0};
@@ -827,11 +904,14 @@ private:
   double hold_y_{0.0};
   double first_land_filtered_x_{0.0};
   double first_land_filtered_y_{0.0};
+  double second_takeoff_x_{0.0};
+  double second_takeoff_y_{0.0};
   rclcpp::Time last_request_time_;
   rclcpp::Time last_track_command_time_;
   rclcpp::Time last_vehicle_time_;
   rclcpp::Time descent_start_time_;
   rclcpp::Time idle_start_time_;
+  rclcpp::Time approach_stable_since_;
   rclcpp::Time follow_stable_since_;
   rclcpp::Time land_stable_since_;
   rclcpp::Time first_land_lowpass_last_time_;

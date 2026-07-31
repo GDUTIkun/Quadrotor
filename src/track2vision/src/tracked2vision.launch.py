@@ -68,7 +68,7 @@ def generate_launch_description():
             executable='servo_pwm_node.py',
             name='servo_pwm_node',
             output='screen',
-            parameters=[{'initial_angle': 180.0}],
+            parameters=[{'initial_angle': 0.0}],
         ),
 
         Node(

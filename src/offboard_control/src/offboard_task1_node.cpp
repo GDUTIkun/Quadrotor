@@ -27,24 +27,27 @@ public:
     declare_parameter<double>("track_command_publish_period", 0.2);
     declare_parameter<double>("flight_height", 1.5);
     declare_parameter<double>("offset_x", 0.375);
-    declare_parameter<double>("offset_y", 0.875);
+    declare_parameter<double>("offset_y", 0.855);
     declare_parameter<double>("takeoff_tolerance", 0.10);
     declare_parameter<double>("vehicle_timeout", 1.0);
     declare_parameter<double>("max_vehicle_jump", 0.5);
-    declare_parameter<double>("follow_tolerance", 0.1);
+    declare_parameter<double>("follow_tolerance", 0.15);
     declare_parameter<double>("follow_stable_time", 1.0);
-    declare_parameter<double>("drop_height", 0.7);
+    declare_parameter<double>("drop_height", 0.5);
     declare_parameter<double>("mission_z_speed", 0.05);
+    declare_parameter<double>("drop_xy_tolerance", 0.05);
+    declare_parameter<double>("drop_z_lowpass_tau", 1.0);
+    declare_parameter<double>("drop_z_lowpass_deadband", 0.10);
     declare_parameter<double>("drop_xy_stable_time", 1.5);
     declare_parameter<double>("release_wait_time", 0.5);
     declare_parameter<double>("return_tolerance", 0.08);
-    declare_parameter<double>("land_request_height", 0.5);
-    declare_parameter<double>("setpoint_lowpass_enable_distance", 0.8);
+    declare_parameter<double>("land_request_height", 0.65);
+    declare_parameter<double>("setpoint_lowpass_enable_distance", 0.6);
     declare_parameter<double>("setpoint_lowpass_tau",1.6);
     declare_parameter<std::string>("servo_topic", "/servo/angle_deg");
     declare_parameter<std::string>("status_topic", "/offboard_task1/status");
     declare_parameter<double>("status_publish_period", 1.0);
-    declare_parameter<double>("release_angle", 30.0);
+    declare_parameter<double>("release_angle", 180.0);
     declare_parameter<std::string>("land_mode", "AUTO.LAND");
     declare_parameter<bool>("auto_set_mode", true);
     declare_parameter<bool>("auto_arm", true);
@@ -196,7 +199,7 @@ private:
         break;
 
       case Phase::DESCEND_FOR_DROP:
-        follow_vehicle(drop_height());
+        follow_vehicle(drop_z_lowpass_setpoint(drop_height()));
         if (!height_reached(drop_height())) {
           drop_xy_stable_ = false;
           break;
@@ -346,6 +349,7 @@ private:
 
     follow_stable_ = false;
     drop_xy_stable_ = false;
+    reset_drop_z_lowpass();
     reset_slow_z_control();
     phase_ = Phase::DESCEND_FOR_DROP;
     RCLCPP_INFO(
@@ -356,6 +360,11 @@ private:
   void reset_slow_z_control()
   {
     slow_z_active_ = false;
+  }
+
+  void reset_drop_z_lowpass()
+  {
+    drop_z_lowpass_active_ = false;
   }
 
   void reset_setpoint_lowpass()
@@ -386,6 +395,34 @@ private:
     return slow_z_command_;
   }
 
+  double drop_z_lowpass_setpoint(double target_z)
+  {
+    const auto current_time = now();
+    if (!drop_z_lowpass_active_) {
+      drop_z_filtered_ = pose_.pose.position.z;
+      drop_z_lowpass_last_update_ = current_time;
+      drop_z_lowpass_active_ = true;
+      return drop_z_filtered_;
+    }
+
+    const double dt = std::clamp(
+      (current_time - drop_z_lowpass_last_update_).seconds(), 0.001, 0.1);
+    drop_z_lowpass_last_update_ = current_time;
+
+    const double tau = drop_z_lowpass_tau();
+    if (tau <= 0.0) {
+      drop_z_filtered_ = target_z;
+      return drop_z_filtered_;
+    }
+
+    const double alpha = dt / (tau + dt);
+    drop_z_filtered_ += alpha * (target_z - drop_z_filtered_);
+    if (std::abs(drop_z_filtered_ - target_z) <= drop_z_lowpass_deadband()) {
+      drop_z_filtered_ = target_z;
+    }
+    return drop_z_filtered_;
+  }
+
   bool height_reached(double target_z) const
   {
     return std::abs(pose_.pose.position.z - target_z) <= takeoff_tolerance();
@@ -407,7 +444,7 @@ private:
 
     const double error = std::hypot(
       pose_.pose.position.x - hold_x_, pose_.pose.position.y - hold_y_);
-    if (error > follow_tolerance()) {
+    if (error > drop_xy_tolerance()) {
       drop_xy_stable_ = false;
       return false;
     }
@@ -695,6 +732,21 @@ private:
     return std::max(0.0, get_parameter("drop_xy_stable_time").as_double());
   }
 
+  double drop_xy_tolerance() const
+  {
+    return std::max(0.02, get_parameter("drop_xy_tolerance").as_double());
+  }
+
+  double drop_z_lowpass_tau() const
+  {
+    return std::max(0.0, get_parameter("drop_z_lowpass_tau").as_double());
+  }
+
+  double drop_z_lowpass_deadband() const
+  {
+    return std::max(0.0, get_parameter("drop_z_lowpass_deadband").as_double());
+  }
+
   double release_wait_time() const
   {
     return std::max(0.0, get_parameter("release_wait_time").as_double());
@@ -741,6 +793,7 @@ private:
   bool land_stable_{false};
   bool payload_released_{false};
   bool slow_z_active_{false};
+  bool drop_z_lowpass_active_{false};
   bool setpoint_lowpass_active_{false};
   int stream_count_{0};
   double start_x_{0.0};
@@ -751,6 +804,7 @@ private:
   double hold_x_{0.0};
   double hold_y_{0.0};
   double slow_z_command_{0.0};
+  double drop_z_filtered_{0.0};
   double filtered_setpoint_x_{0.0};
   double filtered_setpoint_y_{0.0};
   std::string last_status_;
@@ -762,6 +816,7 @@ private:
   rclcpp::Time land_stable_since_;
   rclcpp::Time release_started_time_;
   rclcpp::Time slow_z_last_update_;
+  rclcpp::Time drop_z_lowpass_last_update_;
   rclcpp::Time last_setpoint_lowpass_time_;
   rclcpp::Time last_status_publish_time_;
   rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;

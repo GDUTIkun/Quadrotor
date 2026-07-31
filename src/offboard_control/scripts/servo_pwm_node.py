@@ -6,7 +6,7 @@ from time import sleep
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64
+from std_msgs.msg import Bool, Float64
 
 
 class Rp1ServoPwm:
@@ -66,18 +66,25 @@ class Rp1ServoPwm:
         if self._read_int(self.pwm / "enable") == 0:
             self._write_int(self.pwm / "enable", 1)
 
-    def close(self) -> None:
+    def release(self) -> None:
         if self._read_int(self.pwm / "enable") != 0:
             self._write_int(self.pwm / "enable", 0)
+        if self._read_int(self.pwm / "duty_cycle") != 0:
+            self._write_int(self.pwm / "duty_cycle", 0)
+
+    def close(self) -> None:
+        self.release()
 
 
 class ServoPwmNode(Node):
     def __init__(self) -> None:
         super().__init__("servo_pwm_node")
         self.declare_parameter("initial_angle", 90.0)
+        self.declare_parameter("enable_on_start", True)
         self.declare_parameter("min_pulse_us", 1000)
         self.declare_parameter("max_pulse_us", 2000)
         initial_angle = float(self.get_parameter("initial_angle").value)
+        enable_on_start = bool(self.get_parameter("enable_on_start").value)
         min_pulse_ns = int(self.get_parameter("min_pulse_us").value) * 1000
         max_pulse_ns = int(self.get_parameter("max_pulse_us").value) * 1000
 
@@ -87,13 +94,18 @@ class ServoPwmNode(Node):
             raise ValueError("invalid servo pulse width parameters")
 
         self.servo = Rp1ServoPwm(min_pulse_ns, max_pulse_ns)
-        self.servo.set_angle(initial_angle)
+        if enable_on_start:
+            self.servo.set_angle(initial_angle)
         self.subscription = self.create_subscription(
             Float64, "/servo/angle_deg", self._angle_callback, 10
         )
+        self.release_subscription = self.create_subscription(
+            Bool, "/servo/release", self._release_callback, 10
+        )
         self.get_logger().info(
-            f"GPIO18 RP1 PWM ready; initial angle {initial_angle:.1f} deg, "
-            "listening on /servo/angle_deg"
+            f"GPIO18 RP1 PWM ready; enable_on_start={enable_on_start}, "
+            f"initial angle {initial_angle:.1f} deg, listening on "
+            "/servo/angle_deg and /servo/release"
         )
 
     def _angle_callback(self, message: Float64) -> None:
@@ -108,6 +120,15 @@ class ServoPwmNode(Node):
             self.get_logger().info(f"Servo angle set to {angle:.1f} deg")
         except OSError as error:
             self.get_logger().error(f"Failed to update PWM: {error}")
+
+    def _release_callback(self, message: Bool) -> None:
+        if not message.data:
+            return
+        try:
+            self.servo.release()
+            self.get_logger().info("Servo PWM released; GPIO18 is no longer controlling the servo")
+        except OSError as error:
+            self.get_logger().error(f"Failed to release PWM: {error}")
 
     def destroy_node(self) -> bool:
         self.servo.close()

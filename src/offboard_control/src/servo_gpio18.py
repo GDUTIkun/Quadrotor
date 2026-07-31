@@ -43,10 +43,7 @@ def angle_to_duty_ns(angle: float) -> int:
     )
 
 
-def main() -> None:
-    chip = find_pwm_chip()
-    pwm = export_channel(chip)
-
+def enable_servo(pwm: Path, angle: float) -> None:
     if int((pwm / "enable").read_text().strip()) != 0:
         write_value(pwm / "enable", 0)
     if int((pwm / "duty_cycle").read_text().strip()) != 0:
@@ -54,17 +51,35 @@ def main() -> None:
     write_value(pwm / "period", PERIOD_NS)
     if (pwm / "polarity").exists():
         (pwm / "polarity").write_text("normal", encoding="ascii")
-    write_value(pwm / "duty_cycle", angle_to_duty_ns(90))
+    write_value(pwm / "duty_cycle", angle_to_duty_ns(angle))
     write_value(pwm / "enable", 1)
 
+
+def release_servo(pwm: Path) -> None:
+    if int((pwm / "enable").read_text().strip()) != 0:
+        write_value(pwm / "enable", 0)
+    if int((pwm / "duty_cycle").read_text().strip()) != 0:
+        write_value(pwm / "duty_cycle", 0)
+
+
+def main() -> None:
+    chip = find_pwm_chip()
+    pwm = export_channel(chip)
+
+    enable_servo(pwm, 90)
+
     print(f"GPIO18 hardware PWM: {chip.name}, channel {PWM_CHANNEL}")
-    print("Enter an angle from 0 to 180, or q to quit.")
+    print("Enter an angle from 0 to 180, open/off/release to stop control, or q to quit.")
 
     try:
         while True:
             command = input("angle> ").strip()
             if command.lower() in {"q", "quit", "exit"}:
                 break
+            if command.lower() in {"open", "off", "release", "stop"}:
+                release_servo(pwm)
+                print("Servo signal released; GPIO18 PWM is disabled.")
+                continue
             try:
                 angle = float(command)
             except ValueError:
@@ -73,13 +88,15 @@ def main() -> None:
             if not 0.0 <= angle <= 180.0:
                 print("Angle must be between 0 and 180 degrees.")
                 continue
-            write_value(pwm / "duty_cycle", angle_to_duty_ns(angle))
+            if int((pwm / "enable").read_text().strip()) == 0:
+                enable_servo(pwm, angle)
+            else:
+                write_value(pwm / "duty_cycle", angle_to_duty_ns(angle))
             print(f"Servo commanded to {angle:.1f} degrees.")
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        if int((pwm / "enable").read_text().strip()) != 0:
-            write_value(pwm / "enable", 0)
+        release_servo(pwm)
 
 
 if __name__ == "__main__":
